@@ -172,7 +172,6 @@ RUN mkdir -p /opt/isa-l-src \
     && cd /root \
     && rm -rf /opt/isa-l-src
 
-RUN yum install -y plexus-utils
 ###
 # Avoid out of memory errors in builds
 ###
@@ -186,6 +185,8 @@ ENV HADOOP_SKIP_YETUS_VERIFICATION true
 # So tell Yetus not to read the rest of the file:
 # YETUS CUT HERE
 ###
+
+ rm -rf /usr/share/maven && wget https://www-us.apache.org/dist/maven/maven-3/3.6.3/binaries/apache-maven-3.6.3-bin.tar.gz && tar xf apache-maven-3.6.3-bin.tar.gz -C /usr/share && ln -s /usr/share/apache-maven-3.6.3 /usr/share/maven
 
 # Add a welcome message and environment checks.
 COPY hadoop_env_checks.sh /root/hadoop_env_checks.sh
