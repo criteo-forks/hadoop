@@ -17,7 +17,7 @@
 # Dockerfile for installing the necessary dependencies for building Hadoop.
 # See BUILDING.txt.
 
-FROM ubuntu:focal
+FROM filer-docker-registry.crto.in/criteo-centos-base:0.1.0-760-ga673e65-28642ec06
 
 WORKDIR /root
 
@@ -26,71 +26,69 @@ SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 #####
 # Disable suggests/recommends
 #####
-RUN echo APT::Install-Recommends "0"\; > /etc/apt/apt.conf.d/10disableextras
-RUN echo APT::Install-Suggests "0"\; >>  /etc/apt/apt.conf.d/10disableextras
+#RUN echo APT::Install-Recommends "0"\; > /etc/apt/apt.conf.d/10disableextras
+#RUN echo APT::Install-Suggests "0"\; >>  /etc/apt/apt.conf.d/10disableextras
 
-ENV DEBIAN_FRONTEND noninteractive
-ENV DEBCONF_TERSE true
+#ENV DEBIAN_FRONTEND noninteractive
+#ENV DEBCONF_TERSE true
 
 # hadolint ignore=DL3008
-RUN apt-get -q update \
-    && apt-get -q install -y --no-install-recommends \
+RUN yum groupinstall -y 'Development Tools'
+RUN yum install -y \
         ant \
-        apt-utils \
         bats \
-        build-essential \
         bzip2 \
         clang \
         cmake \
         curl \
         doxygen \
         fuse \
-        g++ \
+        gcc-c++ \
         gcc \
         git \
-        gnupg-agent \
-        hugo \
-        libbcprov-java \
-        libbz2-dev \
-        libcurl4-openssl-dev \
-        libfuse-dev \
-        libprotobuf-dev \
-        libprotoc-dev \
-        libsasl2-dev \
-        libsnappy-dev \
-        libssl-dev \
+        bouncycastle \
+        bzip2-devel \
+        libcurl-devel \
+        fuse-devel \
+        protobuf-devel \
+        cyrus-sasl-devel \
+        snappy-devel \
+        openssl-devel \
         libtool \
-        libzstd-dev \
-        locales \
+        libzstd-devel \
         make \
         maven \
         nodejs \
-        node-yarn \
         npm \
-        openjdk-11-jdk \
-        openjdk-8-jdk \
+        java-1.8.0-openjdk \
         pinentry-curses \
-        pkg-config \
+        pkgconfig \
         python3 \
         python3-pip \
-        python3-pkg-resources \
         python3-setuptools \
         python3-wheel \
         rsync \
-        shellcheck \
-        software-properties-common \
+        ShellCheck \
         sudo \
         valgrind \
-        zlib1g-dev \
-    && apt-get clean \
-    && rm -rf /var/lib/apt/lists/*
+        wget \
+        zlib-devel
+
+# Install node-yarn
+RUN curl --silent --location https://dl.yarnpkg.com/rpm/yarn.repo | sudo tee /etc/yum.repos.d/yarn.repo \
+    && rpm --import https://dl.yarnpkg.com/rpm/pubkey.gpg \
+    && yum install -y yarn
+
+# Install hugo
+RUN wget https://copr.fedorainfracloud.org/coprs/daftaupe/hugo/repo/epel-7/daftaupe-hugo-epel-7.repo -O /etc/yum.repos.d/hugo.repo \
+    && yum install -y hugo
 
 ######
 # Set env vars required to build Hadoop
 ######
 ENV MAVEN_HOME /usr
 # JAVA_HOME must be set in Maven >= 3.5.0 (MNG-6003)
-ENV JAVA_HOME /usr/lib/jvm/java-8-openjdk-amd64
+ENV JAVA_HOME /etc/alternatives/java_sdk
 
 #######
 # Install SpotBugs 4.2.2
@@ -161,9 +159,7 @@ RUN curl -L -s -S \
 ######
 # hadolint ignore=DL3003,DL3008
 RUN mkdir -p /opt/isa-l-src \
-    && apt-get -q update \
-    && apt-get install -y --no-install-recommends automake yasm \
-    && apt-get clean \
+    && yum install -y automake yasm \
     && curl -L -s -S \
       https://github.com/intel/isa-l/archive/v2.29.0.tar.gz \
       -o /opt/isa-l.tar.gz \
