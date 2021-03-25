@@ -172,6 +172,7 @@ RUN mkdir -p /opt/isa-l-src \
     && cd /root \
     && rm -rf /opt/isa-l-src
 
+RUN yum install -y plexus-utils
 ###
 # Avoid out of memory errors in builds
 ###
