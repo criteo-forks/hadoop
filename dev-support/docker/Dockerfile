@@ -187,7 +187,7 @@ ENV HADOOP_SKIP_YETUS_VERIFICATION true
 ###
 
 RUN rm -rf /usr/share/maven && wget https://www-us.apache.org/dist/maven/maven-3/3.6.3/binaries/apache-maven-3.6.3-bin.tar.gz && tar xf apache-maven-3.6.3-bin.tar.gz -C /usr/share && ln -s /usr/share/apache-maven-3.6.3 /usr/share/maven
-
+RUN yum install -y cmake3
 # Add a welcome message and environment checks.
 COPY hadoop_env_checks.sh /root/hadoop_env_checks.sh
 RUN chmod 755 /root/hadoop_env_checks.sh
