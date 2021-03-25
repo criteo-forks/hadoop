@@ -186,6 +186,11 @@ ENV MAVEN_OPTS -Xms256m -Xmx1536m
 # Skip gpg verification when downloading Yetus via yetus-wrapper
 ENV HADOOP_SKIP_YETUS_VERIFICATION true
 
+RUN alternatives --install /usr/local/bin/cmake cmake /usr/bin/cmake3 20 \
+    --slave /usr/local/bin/ctest ctest /usr/bin/ctest3 \
+    --slave /usr/local/bin/cpack cpack /usr/bin/cpack3 \
+    --slave /usr/local/bin/ccmake ccmake /usr/bin/ccmake3 \
+    --family cmake
 ###
 # Everything past this point is either not needed for testing or breaks Yetus.
 # So tell Yetus not to read the rest of the file:
