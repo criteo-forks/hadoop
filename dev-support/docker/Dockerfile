@@ -191,6 +191,8 @@ RUN alternatives --install /usr/local/bin/cmake cmake /usr/bin/cmake3 20 \
     --slave /usr/local/bin/cpack cpack /usr/bin/cpack3 \
     --slave /usr/local/bin/ccmake ccmake /usr/bin/ccmake3 \
     --family cmake
+
+RUN yum install -y java-1.8.0-openjdk-devel
 ###
 # Everything past this point is either not needed for testing or breaks Yetus.
 # So tell Yetus not to read the rest of the file:
