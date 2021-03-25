@@ -23,15 +23,6 @@ WORKDIR /root
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
-#####
-# Disable suggests/recommends
-#####
-#RUN echo APT::Install-Recommends "0"\; > /etc/apt/apt.conf.d/10disableextras
-#RUN echo APT::Install-Suggests "0"\; >>  /etc/apt/apt.conf.d/10disableextras
-
-#ENV DEBIAN_FRONTEND noninteractive
-#ENV DEBCONF_TERSE true
-
 # hadolint ignore=DL3008
 RUN yum groupinstall -y 'Development Tools'
 RUN yum install -y \
@@ -39,7 +30,7 @@ RUN yum install -y \
         bats \
         bzip2 \
         clang \
-        cmake \
+        cmake3 \
         curl \
         doxygen \
         fuse \
@@ -73,6 +64,19 @@ RUN yum install -y \
         valgrind \
         wget \
         zlib-devel
+
+# Use cmake3 as default cmake
+RUN alternatives --install /usr/local/bin/cmake cmake /usr/bin/cmake3 20 \
+    --slave /usr/local/bin/ctest ctest /usr/bin/ctest3 \
+    --slave /usr/local/bin/cpack cpack /usr/bin/cpack3 \
+    --slave /usr/local/bin/ccmake ccmake /usr/bin/ccmake3 \
+    --family cmake
+
+# Install maven 3.6 from source
+RUN rm -rf /usr/share/maven \
+    && wget https://www-us.apache.org/dist/maven/maven-3/3.6.3/binaries/apache-maven-3.6.3-bin.tar.gz \
+    && tar xf apache-maven-3.6.3-bin.tar.gz -C /usr/share \
+    && ln -s /usr/share/apache-maven-3.6.3 /usr/share/maven
 
 # Install node-yarn
 RUN curl --silent --location https://dl.yarnpkg.com/rpm/yarn.repo | sudo tee /etc/yum.repos.d/yarn.repo \
@@ -151,7 +155,7 @@ RUN curl -L -s -S \
         https://github.com/hadolint/hadolint/releases/download/v1.11.1/hadolint-Linux-x86_64 \
         -o /bin/hadolint \
    && chmod a+rx /bin/hadolint \
-   && shasum -a 512 /bin/hadolint | \
+   && sha512sum /bin/hadolint | \
         awk '$1!="734e37c1f6619cbbd86b9b249e69c9af8ee1ea87a2b1ff71dccda412e9dac35e63425225a95d71572091a3f0a11e9a04c2fc25d9e91b840530c26af32b9891ca" {exit(1)}'
 
 ######
