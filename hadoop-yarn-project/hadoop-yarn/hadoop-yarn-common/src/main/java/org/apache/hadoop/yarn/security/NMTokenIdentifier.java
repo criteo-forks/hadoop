@@ -25,8 +25,6 @@ import java.io.DataOutput;
 import java.io.IOException;
 
 import org.apache.hadoop.thirdparty.protobuf.InvalidProtocolBufferException;
-import org.apache.hadoop.yarn.proto.YarnProtos.ApplicationAttemptIdProto;
-import org.apache.hadoop.yarn.proto.YarnProtos.ApplicationIdProto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.classification.InterfaceAudience.Public;
