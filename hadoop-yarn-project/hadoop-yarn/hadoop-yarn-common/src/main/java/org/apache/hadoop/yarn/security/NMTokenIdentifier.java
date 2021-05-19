@@ -25,6 +25,8 @@ import java.io.DataOutput;
 import java.io.IOException;
 
 import org.apache.hadoop.thirdparty.protobuf.InvalidProtocolBufferException;
+import org.apache.hadoop.yarn.proto.YarnProtos.ApplicationAttemptIdProto;
+import org.apache.hadoop.yarn.proto.YarnProtos.ApplicationIdProto;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.classification.InterfaceAudience.Public;
@@ -52,6 +54,8 @@ public class NMTokenIdentifier extends TokenIdentifier {
   public static final Text KIND = new Text("NMToken");
   
   private NMTokenIdentifierProto proto;
+
+  private boolean oldFormat = false;
 
   public NMTokenIdentifier(ApplicationAttemptId appAttemptId, 
       NodeId nodeId, String applicationSubmitter, int masterKeyId) {
@@ -99,7 +103,18 @@ public class NMTokenIdentifier extends TokenIdentifier {
   @Override
   public void write(DataOutput out) throws IOException {
     LOG.debug("Writing NMTokenIdentifier to RPC layer: {}", this);
-    out.write(proto.toByteArray());
+    if (oldFormat) {
+      ApplicationAttemptId appAttemptId = getApplicationAttemptId();
+      ApplicationId applicationId = appAttemptId.getApplicationId();
+      out.writeLong(applicationId.getClusterTimestamp());
+      out.writeInt(applicationId.getId());
+      out.writeInt(appAttemptId.getAttemptId());
+      out.writeUTF(getNodeId().toString());
+      out.writeUTF(getApplicationSubmitter());
+      out.writeInt(getKeyId());
+    } else {
+      out.write(proto.toByteArray());
+    }
   }
 
   @Override
@@ -131,6 +146,7 @@ public class NMTokenIdentifier extends TokenIdentifier {
     builder.setAppSubmitter(in.readUTF());
     builder.setKeyId(in.readInt());
     proto = builder.build();
+    oldFormat = true;
   }
 
   @Override
