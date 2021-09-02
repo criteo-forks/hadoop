@@ -117,6 +117,7 @@ public class NodesListManager extends CompositeService implements
       this.hostsReader =
           createHostsFileReader(this.includesFile, this.excludesFile);
       setDecommissionedNMs();
+      setIncludedNMs();
       printConfiguredHosts(false);
     } catch (YarnException ex) {
       disableHostsFileReader(ex);
@@ -258,6 +259,18 @@ public class NodesListManager extends CompositeService implements
         StringUtils.join(",", hostsReader.getExcludedHosts()) + "}");
 
     handleExcludeNodeList(graceful, timeout);
+  }
+
+  private void setIncludedNMs() {
+    Set<String> includeList = hostsReader.getHosts();
+    for (final String host : includeList) {
+      NodeId nodeId = createUnknownNodeId(host);
+      RMNodeImpl rmNode = new RMNodeImpl(nodeId,
+          rmContext, host, -1, -1, new UnknownNode(host),
+          Resource.newInstance(0, 0), "unknown");
+      rmContext.getInactiveRMNodes().put(nodeId, rmNode);
+      rmNode.handle(new RMNodeEvent(nodeId, RMNodeEventType.EXPIRE));
+    }
   }
 
   private void setDecommissionedNMs() {
