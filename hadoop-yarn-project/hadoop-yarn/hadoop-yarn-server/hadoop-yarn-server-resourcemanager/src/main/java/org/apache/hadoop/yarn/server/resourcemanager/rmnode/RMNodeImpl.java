@@ -219,6 +219,9 @@ public class RMNodeImpl implements RMNode, EventHandler<RMNodeEvent> {
       .addTransition(NodeState.NEW, NodeState.NEW,
           RMNodeEventType.FINISHED_CONTAINERS_PULLED_BY_AM,
           new AddContainersToBeRemovedFromNMTransition())
+      .addTransition(NodeState.NEW, NodeState.LOST,
+          RMNodeEventType.EXPIRE,
+          new DeactivateNodeTransition(NodeState.LOST))
 
       //Transitions from RUNNING state
       .addTransition(NodeState.RUNNING,
@@ -708,28 +711,32 @@ public class RMNodeImpl implements RMNode, EventHandler<RMNodeEvent> {
   private void updateMetricsForRejoinedNode(NodeState previousNodeState) {
     ClusterMetrics metrics = ClusterMetrics.getMetrics();
     metrics.incrNumActiveNodes();
+    decrementMetricBasedOnPreviousNodeState(previousNodeState);
+  }
 
+  private void decrementMetricBasedOnPreviousNodeState(NodeState previousNodeState) {
+    ClusterMetrics metrics = ClusterMetrics.getMetrics();
     switch (previousNodeState) {
-    case LOST:
-      metrics.decrNumLostNMs();
-      break;
-    case REBOOTED:
-      metrics.decrNumRebootedNMs();
-      break;
-    case DECOMMISSIONED:
-      metrics.decrDecommisionedNMs();
-      break;
-    case UNHEALTHY:
-      metrics.decrNumUnhealthyNMs();
-      break;
-    case SHUTDOWN:
-      metrics.decrNumShutdownNMs();
-      break;
-    case DECOMMISSIONING:
-      metrics.decrDecommissioningNMs();
-      break;
-    default:
-      LOG.debug("Unexpected previous node state");
+      case LOST:
+        metrics.decrNumLostNMs();
+        break;
+      case REBOOTED:
+        metrics.decrNumRebootedNMs();
+        break;
+      case DECOMMISSIONED:
+        metrics.decrDecommisionedNMs();
+        break;
+      case UNHEALTHY:
+        metrics.decrNumUnhealthyNMs();
+        break;
+      case SHUTDOWN:
+        metrics.decrNumShutdownNMs();
+        break;
+      case DECOMMISSIONING:
+        metrics.decrDecommissioningNMs();
+        break;
+      default:
+        LOG.debug("Unexpected previous node state");
     }
   }
 
@@ -869,7 +876,7 @@ public class RMNodeImpl implements RMNode, EventHandler<RMNodeEvent> {
         previousRMNode =
             rmNode.context.getInactiveRMNodes().remove(unknownNodeId);
         if (previousRMNode != null) {
-          ClusterMetrics.getMetrics().decrDecommisionedNMs();
+          rmNode.decrementMetricBasedOnPreviousNodeState(previousRMNode.getState());
         }
         // Increment activeNodes explicitly because this is a new node.
         ClusterMetrics.getMetrics().incrNumActiveNodes();
