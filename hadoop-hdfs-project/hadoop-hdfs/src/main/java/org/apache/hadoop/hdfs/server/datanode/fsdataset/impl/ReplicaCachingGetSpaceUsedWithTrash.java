@@ -42,13 +42,18 @@ public class ReplicaCachingGetSpaceUsedWithTrash extends ReplicaCachingGetSpaceU
             LoggerFactory.getLogger(ReplicaCachingGetSpaceUsedWithTrash.class);
 
     private final String bpid;
+    private final File rootPath;
     private final GetSpaceUsed trashDU;
 
     public ReplicaCachingGetSpaceUsedWithTrash(Builder builder) throws IOException {
         super(builder);
         bpid = builder.getBpid();
-        File trashPath = new File(builder.getPath(), BlockPoolSliceStorage.TRASH_ROOT_DIR);
-        LOG.info("Monitoring trash folder size " + trashPath);
+        rootPath = builder.getPath();
+        File trashPath = new File(rootPath, BlockPoolSliceStorage.TRASH_ROOT_DIR);
+        LOG.info(
+                "Setup disk size monitoring for [{} -> {}]. Trash folder: {}",
+                bpid, rootPath, trashPath
+        );
         trashDU = new GetSpaceUsed.Builder()
                 .setPath(trashPath)
                 .setConf(builder.getConf())
@@ -71,7 +76,8 @@ public class ReplicaCachingGetSpaceUsedWithTrash extends ReplicaCachingGetSpaceU
             LOG.warn("Could not retrieved trash space used", e);
         }
 
-        LOG.info("Reporting bpid " + bpid + " size including trash dir. Blocks size: " + usedValue + " Trash size:" + trashUsed);
+        LOG.info("Reporting [{} -> {}] size. Blocks: {} Trash: {}",
+                bpid, rootPath, usedValue, trashUsed);
 
         super.setUsed(usedValue + trashUsed);
     }
@@ -90,7 +96,7 @@ public class ReplicaCachingGetSpaceUsedWithTrash extends ReplicaCachingGetSpaceU
             if (trashPath.exists()) {
                 super.refresh();
             } else {
-                LOG.info("Trash path " + trashPath + " does not exists, skipping size evaluation");
+                LOG.info("Trash path {} does not exists, skipping size evaluation", trashPath);
                 setUsed(0);
             }
         }
