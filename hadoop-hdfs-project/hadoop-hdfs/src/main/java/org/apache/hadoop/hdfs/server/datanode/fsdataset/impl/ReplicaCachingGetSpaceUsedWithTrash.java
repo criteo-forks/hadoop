@@ -64,14 +64,14 @@ public class ReplicaCachingGetSpaceUsedWithTrash extends ReplicaCachingGetSpaceU
          */
         long trashUsed;
 
-        LOG.info("Scanning bpid " + bpid + " including trash dir. Regular blocks size used is " + usedValue);
         try {
             trashUsed = trashDU.getUsed();
-            LOG.info("Trash size is for bpid " + bpid + " is " + trashUsed);
         } catch (IOException e) {
             trashUsed = 0;
             LOG.warn("Could not retrieved trash space used", e);
         }
+
+        LOG.info("Reporting bpid " + bpid + " size including trash dir. Blocks size: " + usedValue + " Trash size:" + trashUsed);
 
         super.setUsed(usedValue + trashUsed);
     }
