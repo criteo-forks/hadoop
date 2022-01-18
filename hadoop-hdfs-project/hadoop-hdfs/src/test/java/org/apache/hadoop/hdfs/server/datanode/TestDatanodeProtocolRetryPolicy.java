@@ -195,13 +195,13 @@ public class TestDatanodeProtocolRetryPolicy {
           heartbeatResponse = new HeartbeatResponse(
               new DatanodeCommand[]{RegisterCommand.REGISTER},
               new NNHAStatusHeartbeat(HAServiceState.ACTIVE, 1),
-              null, ThreadLocalRandom.current().nextLong() | 1L);
+              null, ThreadLocalRandom.current().nextLong() | 1L, 0);
         } else {
           LOG.info("mockito heartbeatResponse " + i);
           heartbeatResponse = new HeartbeatResponse(
               new DatanodeCommand[0],
               new NNHAStatusHeartbeat(HAServiceState.ACTIVE, 1),
-              null, ThreadLocalRandom.current().nextLong() | 1L);
+              null, ThreadLocalRandom.current().nextLong() | 1L, 0);
         }
         return heartbeatResponse;
       }

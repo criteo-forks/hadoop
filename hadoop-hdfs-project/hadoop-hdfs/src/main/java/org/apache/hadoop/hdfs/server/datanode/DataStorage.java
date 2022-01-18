@@ -52,6 +52,7 @@ import org.apache.hadoop.fs.StorageType;
 import org.apache.hadoop.hdfs.DFSConfigKeys;
 import org.apache.hadoop.hdfs.DFSUtilClient;
 import org.apache.hadoop.hdfs.protocol.Block;
+import org.apache.hadoop.hdfs.protocol.BlockType;
 import org.apache.hadoop.hdfs.protocol.LayoutVersion;
 import org.apache.hadoop.hdfs.server.common.HdfsServerConstants;
 import org.apache.hadoop.hdfs.server.common.HdfsServerConstants.NodeType;
@@ -94,6 +95,9 @@ public class DataStorage extends Storage {
    * directory exists.
    */
   private Set<String> trashEnabledBpids;
+  private Map<String, Long> rollingUpgradeLastAllocatedContiguousBlockIdByBpid;
+  private Map<String, Long> rollingUpgradeLastAllocatedStripedBlockIdByBpid;
+  private Map<String, Long> generationStampV1LimitByBpid;
 
   /**
    * Datanode UUID that this storage is currently attached to. This
@@ -112,6 +116,9 @@ public class DataStorage extends Storage {
     super(NodeType.DATA_NODE);
     trashEnabledBpids = Collections.newSetFromMap(
         new ConcurrentHashMap<String, Boolean>());
+    rollingUpgradeLastAllocatedContiguousBlockIdByBpid = new ConcurrentHashMap<String, Long>();
+    rollingUpgradeLastAllocatedStripedBlockIdByBpid = new ConcurrentHashMap<String, Long>();
+    generationStampV1LimitByBpid = new ConcurrentHashMap<String, Long>();
   }
   
   public BlockPoolSliceStorage getBPStorage(String bpid) {
@@ -170,8 +177,12 @@ public class DataStorage extends Storage {
    * enabled by the caller, it is superseded by the 'previous' directory
    * if a layout upgrade is in progress.
    */
-  public void enableTrash(String bpid) {
+  public void enableTrash(String bpid,  long rollingUpgradeLastAllocatedContiguousBlockId,
+                          long rollingUpgradeLastAllocatedStripedBlockId, long generationStampV1Limit) {
     if (trashEnabledBpids.add(bpid)) {
+      rollingUpgradeLastAllocatedContiguousBlockIdByBpid.put(bpid, rollingUpgradeLastAllocatedContiguousBlockId);
+      rollingUpgradeLastAllocatedStripedBlockIdByBpid.put(bpid, rollingUpgradeLastAllocatedStripedBlockId);
+      generationStampV1LimitByBpid.put(bpid, generationStampV1Limit);
       getBPStorage(bpid).stopTrashCleaner();
       LOG.info("Enabled trash for bpid {}",  bpid);
     }
@@ -181,6 +192,9 @@ public class DataStorage extends Storage {
     if (trashEnabledBpids.contains(bpid)) {
       getBPStorage(bpid).clearTrash();
       trashEnabledBpids.remove(bpid);
+      rollingUpgradeLastAllocatedContiguousBlockIdByBpid.remove(bpid);
+      rollingUpgradeLastAllocatedStripedBlockIdByBpid.remove(bpid);
+      generationStampV1LimitByBpid.remove(bpid);
       LOG.info("Cleared trash for bpid {}", bpid);
     }
   }
@@ -207,10 +221,23 @@ public class DataStorage extends Storage {
    *         otherwise.
    */
   public String getTrashDirectoryForReplica(String bpid, ReplicaInfo info) {
-    if (trashEnabledBpids.contains(bpid)) {
+    if (trashEnabledBpids.contains(bpid) && isBlockBeforeRollingUpgrade(bpid, info)) {
       return getBPStorage(bpid).getTrashDirectory(info);
     }
     return null;
+  }
+
+  private boolean isBlockBeforeRollingUpgrade(String bpid, ReplicaInfo info) {
+    boolean isStriped = BlockType.fromBlockId(info.getBlockId()) == BlockType.STRIPED;
+    // it is important to test if the block is legacy first
+    // as some legacy blocks might have the bit set that is used to identify striped blocks
+    return isLegacyBlock(bpid, info) ||
+            (!isStriped && info.getBlockId() <= rollingUpgradeLastAllocatedContiguousBlockIdByBpid.get(bpid)) ||
+            (isStriped && info.getBlockId() <= rollingUpgradeLastAllocatedStripedBlockIdByBpid.get(bpid));
+  }
+
+  boolean isLegacyBlock(String bpid, ReplicaInfo info) {
+    return info.getGenerationStamp() < generationStampV1LimitByBpid.get(bpid);
   }
 
   /**

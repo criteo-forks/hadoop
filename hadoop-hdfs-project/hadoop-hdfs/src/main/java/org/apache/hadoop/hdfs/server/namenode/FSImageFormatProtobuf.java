@@ -504,7 +504,8 @@ public final class FSImageFormatProtobuf {
           && fsn.getFSImage().hasRollbackFSImage()) {
         // we set the rollingUpgradeInfo only when we make sure we have the
         // rollback image
-        fsn.setRollingUpgradeInfo(true, s.getRollingUpgradeStartTime());
+        fsn.setRollingUpgradeInfo(true, s.getRollingUpgradeStartTime(),
+                s.getLastAllocatedBlockId(), 0);
       }
     }
 
@@ -950,6 +951,7 @@ public final class FSImageFormatProtobuf {
       b.setNamespaceId(fsn.unprotectedGetNamespaceInfo().getNamespaceID());
       if (fsn.isRollingUpgrade()) {
         b.setRollingUpgradeStartTime(fsn.getRollingUpgradeInfo().getStartTime());
+        b.setRollingUpgradeLastAllocatedContiguousBlockId(fsn.getRollingUpgradeInfo().getLastAllocatedContiguousBlockId());
       }
       NameSystemSection s = b.build();
       s.writeDelimitedTo(out);

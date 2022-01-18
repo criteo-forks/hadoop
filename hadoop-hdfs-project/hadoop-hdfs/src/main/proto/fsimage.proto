@@ -74,6 +74,8 @@ message NameSystemSection {
   optional uint64 transactionId = 6;
   optional uint64 rollingUpgradeStartTime = 7;
   optional uint64 lastAllocatedStripedBlockId = 8;
+  optional uint64 rollingUpgradeLastAllocatedContiguousBlockId = 999;
+  optional uint64 rollingUpgradeLastAllocatedStripedBlockId = 1000;
 }
 
 /**

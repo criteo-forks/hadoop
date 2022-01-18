@@ -36,14 +36,17 @@ public class HeartbeatResponse {
   private final RollingUpgradeStatus rollingUpdateStatus;
 
   private final long fullBlockReportLeaseId;
+
+  private final long generationStampV1Limit;
   
   public HeartbeatResponse(DatanodeCommand[] cmds,
       NNHAStatusHeartbeat haStatus, RollingUpgradeStatus rollingUpdateStatus,
-      long fullBlockReportLeaseId) {
+      long fullBlockReportLeaseId, long generationStampV1Limit) {
     commands = cmds;
     this.haStatus = haStatus;
     this.rollingUpdateStatus = rollingUpdateStatus;
     this.fullBlockReportLeaseId = fullBlockReportLeaseId;
+    this.generationStampV1Limit = generationStampV1Limit;
   }
   
   public DatanodeCommand[] getCommands() {
@@ -61,4 +64,6 @@ public class HeartbeatResponse {
   public long getFullBlockReportLeaseId() {
     return fullBlockReportLeaseId;
   }
+
+  public long getGenerationStampV1Limit() { return generationStampV1Limit; }
 }

@@ -4891,12 +4891,72 @@ public abstract class FSEditLogOp {
   }  
 
   static class RollingUpgradeStartOp extends RollingUpgradeOp {
+
+    private static final String name = "start";
+    private long lastAllocatedContiguousBlockId;
+    private long lastAllocatedStripedBlockId;
+
     RollingUpgradeStartOp() {
-      super(OP_ROLLING_UPGRADE_START, "start");
+      super(OP_ROLLING_UPGRADE_START, name);
     }
 
     static RollingUpgradeStartOp getInstance(OpInstanceCache cache) {
       return (RollingUpgradeStartOp) cache.get(OP_ROLLING_UPGRADE_START);
+    }
+
+    long getLastAllocatedContiguousBlockId() {
+      return lastAllocatedContiguousBlockId;
+    }
+
+    void setLastAllocatedContiguousBlockId(long lastAllocatedContiguousBlockId) {
+      this.lastAllocatedContiguousBlockId = lastAllocatedContiguousBlockId;
+    }
+
+    long getLastAllocatedStripedBlockId() {
+      return lastAllocatedStripedBlockId;
+    }
+
+    void setLastAllocatedStripedBlockId(long lastAllocatedStripedBlockId) {
+      this.lastAllocatedStripedBlockId = lastAllocatedStripedBlockId;
+    }
+
+    @Override
+    void readFields(DataInputStream in, int logVersion) throws IOException {
+      super.readFields(in, logVersion);
+      lastAllocatedContiguousBlockId = in.readLong();
+      lastAllocatedStripedBlockId = in.readLong();
+    }
+
+    @Override
+    public void writeFields(DataOutputStream out) throws IOException {
+      super.writeFields(out);
+      FSImageSerialization.writeLong(lastAllocatedContiguousBlockId, out);
+      FSImageSerialization.writeLong(lastAllocatedStripedBlockId, out);
+    }
+
+    @Override
+    protected void toXml(ContentHandler contentHandler) throws SAXException {
+      super.toXml(contentHandler);
+      XMLUtils.addSaxString(contentHandler, name + "LAST_ALLOCATED_CONTIGUOUS_BLOCK_ID",
+              Long.toString(lastAllocatedContiguousBlockId));
+      XMLUtils.addSaxString(contentHandler, name + "LAST_ALLOCATED_STRIPED_BLOCK_ID",
+              Long.toString(lastAllocatedStripedBlockId));
+    }
+
+    @Override
+    void fromXml(Stanza st) throws InvalidXmlException {
+      super.fromXml(st);
+      this.lastAllocatedContiguousBlockId = Long.parseLong(st.getValue(name + "LAST_ALLOCATED_CONTIGUOUS_BLOCK_ID"));
+      this.lastAllocatedStripedBlockId = Long.parseLong(st.getValue(name + "LAST_ALLOCATED_STRIPED_BLOCK_ID"));
+    }
+
+    @Override
+    public String toString() {
+      return new StringBuilder().append("RollingUpgradeOp [").append(name)
+              .append(", time=").append(getTime())
+              .append(", lastAllocatedContiguousBlockId").append(getLastAllocatedContiguousBlockId())
+              .append(", lastAllocatedStripedBlockId").append(getLastAllocatedStripedBlockId())
+              .append("]").toString();
     }
   }
 

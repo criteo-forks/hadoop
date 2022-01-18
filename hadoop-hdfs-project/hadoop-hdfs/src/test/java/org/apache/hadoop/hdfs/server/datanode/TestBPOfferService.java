@@ -205,7 +205,7 @@ public class TestBPOfferService {
       LOG.info("fullBlockReportLeaseId=" + fullBlockReportLeaseId);
       HeartbeatResponse heartbeatResponse = new HeartbeatResponse(
           datanodeCommands[nnIdx], mockHaStatuses[nnIdx], null,
-          fullBlockReportLeaseId);
+          fullBlockReportLeaseId, 0);
       //reset the command
       datanodeCommands[nnIdx] = new DatanodeCommand[0];
       return heartbeatResponse;
@@ -227,7 +227,7 @@ public class TestBPOfferService {
       DatanodeCommand[] cmds = new DatanodeCommand[1];
       cmds[0] = new RegisterCommand();
       return new HeartbeatResponse(cmds, mockHaStatuses[nnIdx],
-          null, 0L);
+          null, 0L, 0);
     }
   }
 

@@ -540,14 +540,17 @@ class BPOfferService {
    * Signal the current rolling upgrade status as indicated by the NN.
    * @param rollingUpgradeStatus rolling upgrade status
    */
-  void signalRollingUpgrade(RollingUpgradeStatus rollingUpgradeStatus)
+  void signalRollingUpgrade(RollingUpgradeStatus rollingUpgradeStatus, long generationStampV1Limit)
       throws IOException {
     if (rollingUpgradeStatus == null) {
       return;
     }
     String bpid = getBlockPoolId();
     if (!rollingUpgradeStatus.isFinalized()) {
-      dn.getFSDataset().enableTrash(bpid);
+      dn.getFSDataset().enableTrash(bpid,
+              rollingUpgradeStatus.getLastAllocatedContiguousBlockId(),
+              rollingUpgradeStatus.getLastAllocatedStripedBlockId(),
+              generationStampV1Limit);
       dn.getFSDataset().setRollingUpgradeMarker(bpid);
     } else {
       dn.getFSDataset().clearTrash(bpid);
