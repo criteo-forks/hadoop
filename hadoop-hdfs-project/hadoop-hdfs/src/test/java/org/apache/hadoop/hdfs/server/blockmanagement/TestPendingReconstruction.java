@@ -31,7 +31,7 @@ import java.io.IOException;
 import java.util.ArrayList;
 import java.util.concurrent.TimeoutException;
 
-import com.google.common.base.Supplier;
+import org.apache.hadoop.thirdparty.com.google.common.base.Supplier;
 
 import org.apache.commons.lang.StringUtils;
 import org.apache.hadoop.conf.Configuration;

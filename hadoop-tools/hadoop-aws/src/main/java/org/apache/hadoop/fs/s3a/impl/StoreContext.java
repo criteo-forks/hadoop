@@ -22,7 +22,7 @@ import java.io.File;
 import java.io.IOException;
 import java.net.URI;
 
-import com.google.common.util.concurrent.ListeningExecutorService;
+import org.apache.hadoop.thirdparty.com.google.common.util.concurrent.ListeningExecutorService;
 
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;

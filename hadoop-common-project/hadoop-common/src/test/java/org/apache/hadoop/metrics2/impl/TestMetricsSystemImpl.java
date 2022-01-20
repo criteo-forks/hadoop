@@ -40,7 +40,7 @@ import static org.mockito.Mockito.*;
 
 import com.google.common.base.Predicate;
 import com.google.common.base.Supplier;
-import com.google.common.collect.Iterables;
+import org.apache.hadoop.thirdparty.com.google.common.collect.Iterables;
 
 import org.apache.commons.configuration2.SubsetConfiguration;
 import org.apache.hadoop.metrics2.MetricsException;

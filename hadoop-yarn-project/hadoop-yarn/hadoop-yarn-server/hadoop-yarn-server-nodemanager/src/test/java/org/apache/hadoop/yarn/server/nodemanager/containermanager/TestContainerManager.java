@@ -18,7 +18,7 @@
 
 package org.apache.hadoop.yarn.server.nodemanager.containermanager;
 
-import com.google.common.collect.Lists;
+import org.apache.hadoop.thirdparty.com.google.common.collect.Lists;
 import org.apache.hadoop.yarn.api.protocolrecords.GetLocalizationStatusesRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.GetLocalizationStatusesResponse;
 import org.apache.hadoop.yarn.api.records.LocalizationState;
@@ -53,7 +53,7 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 
-import com.google.common.base.Supplier;
+import org.apache.hadoop.thirdparty.com.google.common.base.Supplier;
 import org.apache.hadoop.fs.FileContext;
 import org.apache.hadoop.fs.FileUtil;
 import org.apache.hadoop.fs.Path;

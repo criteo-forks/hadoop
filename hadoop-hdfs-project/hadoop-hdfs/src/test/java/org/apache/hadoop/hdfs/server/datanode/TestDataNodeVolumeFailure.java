@@ -91,7 +91,7 @@ import org.junit.rules.Timeout;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.base.Supplier;
+import org.apache.hadoop.thirdparty.com.google.common.base.Supplier;
 
 /**
  * Fine-grain testing of block files and locations after volume failure.

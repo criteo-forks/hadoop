@@ -18,7 +18,7 @@
 
 package org.apache.hadoop.yarn.server.nodemanager;
 
-import com.google.common.annotations.VisibleForTesting;
+import org.apache.hadoop.thirdparty.com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.Optional;
 import org.apache.hadoop.hdfs.protocol.datatransfer.IOStreamPair;
 import org.apache.hadoop.yarn.server.nodemanager.executor.ContainerExecContext;

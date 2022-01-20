@@ -37,9 +37,9 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.LongAccumulator;
 
-import com.google.common.base.Function;
-import com.google.common.base.Joiner;
-import com.google.common.collect.Iterables;
+import org.apache.hadoop.thirdparty.com.google.common.base.Function;
+import org.apache.hadoop.thirdparty.com.google.common.base.Joiner;
+import org.apache.hadoop.thirdparty.com.google.common.collect.Iterables;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -61,7 +61,7 @@ import org.apache.hadoop.io.retry.RetryInvocationHandler;
 import org.apache.hadoop.test.GenericTestUtils;
 import org.apache.hadoop.util.Time;
 
-import com.google.common.base.Supplier;
+import org.apache.hadoop.thirdparty.com.google.common.base.Supplier;
 
 /**
  * Static utility functions useful for testing HA.
