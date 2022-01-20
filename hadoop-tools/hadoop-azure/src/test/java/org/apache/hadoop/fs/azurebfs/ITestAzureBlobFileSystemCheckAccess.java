@@ -17,7 +17,7 @@
  */
 package org.apache.hadoop.fs.azurebfs;
 
-import com.google.common.collect.Lists;
+import org.apache.hadoop.thirdparty.com.google.common.collect.Lists;
 
 import java.io.FileNotFoundException;
 import java.io.IOException;

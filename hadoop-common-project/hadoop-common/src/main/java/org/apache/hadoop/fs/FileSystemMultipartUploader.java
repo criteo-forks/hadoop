@@ -26,7 +26,7 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.stream.Collectors;
 
-import com.google.common.base.Charsets;
+import org.apache.hadoop.thirdparty.com.google.common.base.Charsets;
 
 import org.apache.commons.compress.utils.IOUtils;
 import org.apache.hadoop.classification.InterfaceAudience;

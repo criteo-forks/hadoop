@@ -17,8 +17,8 @@
  */
 package org.apache.hadoop.hdfs.server.datanode.fsdataset.impl;
 
-import com.google.common.base.Supplier;
-import com.google.common.collect.Lists;
+import org.apache.hadoop.thirdparty.com.google.common.base.Supplier;
+import org.apache.hadoop.thirdparty.com.google.common.collect.Lists;
 
 import java.io.FileInputStream;
 import java.io.OutputStream;

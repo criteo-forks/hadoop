@@ -34,7 +34,7 @@ import org.apache.hadoop.util.FakeTimer;
 import org.junit.Before;
 import org.junit.Test;
 
-import com.google.common.base.Supplier;
+import org.apache.hadoop.thirdparty.com.google.common.base.Supplier;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertTrue;

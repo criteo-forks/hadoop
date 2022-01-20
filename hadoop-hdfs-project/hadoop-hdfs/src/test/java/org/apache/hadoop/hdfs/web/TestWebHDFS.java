@@ -54,7 +54,7 @@ import java.util.Iterator;
 import java.util.Map;
 import java.util.Random;
 
-import com.google.common.collect.ImmutableList;
+import org.apache.hadoop.thirdparty.com.google.common.collect.ImmutableList;
 import org.apache.commons.io.IOUtils;
 import org.apache.hadoop.fs.QuotaUsage;
 import org.apache.hadoop.test.LambdaTestUtils;

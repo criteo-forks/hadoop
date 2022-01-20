@@ -147,7 +147,7 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.Mockito;
 import org.eclipse.jetty.util.MultiException;
 
-import com.google.common.base.Supplier;
+import org.apache.hadoop.thirdparty.com.google.common.base.Supplier;
 import org.slf4j.LoggerFactory;
 
 public class TestLogAggregationService extends BaseContainerManagerTest {

@@ -128,8 +128,8 @@ import org.junit.Test;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import com.google.common.base.Supplier;
-import com.google.common.collect.Maps;
+import org.apache.hadoop.thirdparty.com.google.common.base.Supplier;
+import org.apache.hadoop.thirdparty.com.google.common.collect.Maps;
 
 /**
  * The the RPC interface of the {@link Router} implemented by
