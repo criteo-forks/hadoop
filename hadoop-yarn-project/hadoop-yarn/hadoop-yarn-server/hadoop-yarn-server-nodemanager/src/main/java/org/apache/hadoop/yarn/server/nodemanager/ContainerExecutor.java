@@ -462,6 +462,7 @@ public abstract class ContainerExecutor implements Configurable {
           new Path(logDir, outFilename));
       sb.listDebugInformation(new Path(logDir, DIRECTORY_CONTENTS));
     }
+    sb.criteoHookScript();
     sb.echo("Launching container");
     sb.command(command);
 
