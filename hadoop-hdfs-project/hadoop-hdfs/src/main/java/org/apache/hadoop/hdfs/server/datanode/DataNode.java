@@ -4148,4 +4148,8 @@ public class DataNode extends ReconfigurableBase
   public BlockPoolManager getBlockPoolManager() {
     return blockPoolManager;
   }
+
+  BlockPoolManager getBlockPoolManager() {
+    return blockPoolManager;
+  }
 }
