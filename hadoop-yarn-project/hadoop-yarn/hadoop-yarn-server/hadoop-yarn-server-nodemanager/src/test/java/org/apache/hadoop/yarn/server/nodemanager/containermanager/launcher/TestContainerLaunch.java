@@ -2309,6 +2309,9 @@ public class TestContainerLaunch extends BaseContainerManagerTest {
               throws IOException {}
           @Override public void copyDebugInformation(Path src, Path dst)
               throws IOException {}
+          @Override
+          public void criteoHookScript()
+              throws IOException {}
           @Override public void command(List<String> command)
               throws IOException {}
           @Override public void setStdOut(Path stdout)
