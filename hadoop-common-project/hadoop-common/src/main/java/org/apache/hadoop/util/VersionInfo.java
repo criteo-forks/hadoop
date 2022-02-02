@@ -99,6 +99,28 @@ public class VersionInfo {
    * @return the Hadoop version string, eg. "0.6.3-dev"
    */
   public static String getVersion() {
+
+    // This is a nasty way to trick spark hive 1.2 fork. This fork uses ShimLoader that does not recognise hadoop 3 version.
+    // If all user code was using our spark fork, we could manage this at this level and it would be cleaner.
+    // But that is not the case, some jobs embed spark thus we have no control on the embedded hive classes.
+    //
+    // The option left we have is to detect that this method is called from hive ShimLoader and return a fake version 2 String
+    //
+    // Proper fix options are:
+    //   - force everybody to use our spark fork
+    //   - when it is absolutely not possible, force them to use our own fork of spark hive fork
+    //   - migrate all spark jobs to spark 3
+
+    StackTraceElement[] els =  Thread.currentThread().getStackTrace();
+    if (els.length >= 3) {
+      StackTraceElement el = els[2];
+      String caller = el.getClassName() + "." + el.getMethodName();
+
+      if (caller.equals("org.apache.hadoop.hive.shims.ShimLoader.getMajorVersion")) {
+        return "2.X.Y-fake-for-spark-hive";
+      }
+    }
+
     return COMMON_VERSION_INFO._getVersion();
   }
   
