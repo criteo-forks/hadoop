@@ -19,6 +19,7 @@ package org.apache.hadoop.tools;
 
 import java.io.DataInput;
 import java.io.DataOutput;
+import java.io.EOFException;
 import java.io.IOException;
 import java.util.Collections;
 import java.util.Iterator;
@@ -378,8 +379,15 @@ public final class CopyListingFileStatus implements Writable {
       xAttrs = null;
     }
 
-    chunkOffset = in.readLong();
-    chunkLength = in.readLong();
+    try {
+      chunkOffset = in.readLong();
+      chunkLength = in.readLong();
+    } catch (EOFException e) {
+      // Retro compatibility with hdp2
+      // When the object is serialized by hdp2 (hdp2 does not support chunk copy), these 2 fields don't exist.
+      chunkOffset = 0l;
+      chunkLength = length;
+    }
   }
 
   @Override
