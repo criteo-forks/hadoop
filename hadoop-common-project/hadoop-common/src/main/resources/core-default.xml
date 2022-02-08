@@ -189,7 +189,7 @@
 
 <property>
   <name>hadoop.security.groups.shell.command.timeout</name>
-  <value>0s</value>
+  <value>0</value>
   <description>
     Used by the ShellBasedUnixGroupsMapping class, this property controls how
     long to wait for the underlying shell command that is run to fetch groups.
@@ -613,7 +613,7 @@
 
   <property>
     <name>hadoop.service.shutdown.timeout</name>
-    <value>30s</value>
+    <value>30</value>
     <description>
       Timeout to wait for each shutdown operation to complete.
       If a hook takes longer than this time to complete, it will be interrupted,
@@ -1728,7 +1728,7 @@
 
 <property>
   <name>fs.s3a.s3guard.consistency.retry.interval</name>
-  <value>2s</value>
+  <value>2</value>
   <description>
     Initial interval between attempts to retry operations while waiting for S3
     to become consistent with the S3Guard data.
