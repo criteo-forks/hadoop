@@ -969,7 +969,7 @@
     RM DelegationTokenRenewer thread timeout
     </description>
     <name>yarn.resourcemanager.delegation-token-renewer.thread-timeout</name>
-    <value>60s</value>
+    <value>60</value>
   </property>
 
   <property>
@@ -985,7 +985,7 @@
     Time interval between each RM DelegationTokenRenewer thread retry attempt
     </description>
     <name>yarn.resourcemanager.delegation-token-renewer.thread-retry-interval</name>
-    <value>60s</value>
+    <value>60</value>
   </property>
 
   <property>
