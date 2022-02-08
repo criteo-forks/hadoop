@@ -54,62 +54,62 @@ public final class DistCpOptions {
   /** File path (hdfs:// or file://) that contains the list of actual files to
    * copy.
    */
-  private final Path sourceFileListing;
+  private Path sourceFileListing;
 
   /** List of source-paths (including wildcards) to be copied to target. */
-  private final List<Path> sourcePaths;
+  private List<Path> sourcePaths;
 
   /** Destination path for the dist-copy. */
-  private final Path targetPath;
+  private Path targetPath;
 
   /** Whether data need to be committed automatically. */
-  private final boolean atomicCommit;
+  private boolean atomicCommit = false;
 
   /** the work path for atomic commit. If null, the work
    * path would be parentOf(targetPath) + "/._WIP_" + nameOf(targetPath). */
-  private final Path atomicWorkPath;
+  private Path atomicWorkPath;
 
   /** Whether source and target folder contents be sync'ed up. */
-  private final boolean syncFolder;
+  private boolean syncFolder = false;
 
   /** Path to save source/dest sequence files to, if non-null. */
-  private final Path trackPath;
+  private Path trackPath;
 
   /** Whether files only present in target should be deleted. */
-  private boolean deleteMissing;
+  private boolean deleteMissing = false;
 
   /** Whether failures during copy be ignored. */
-  private final boolean ignoreFailures;
+  private boolean ignoreFailures = false;
 
   /** Whether files should always be overwritten on target. */
-  private final boolean overwrite;
+  private boolean overwrite = false;
 
   /** Whether we want to append new data to target files. This is valid only
    * with update option and CRC is not skipped. */
-  private final boolean append;
+  private boolean append = false;
 
   /** Whether checksum comparison should be skipped while determining if source
    * and destination files are identical. */
-  private final boolean skipCRC;
+  private boolean skipCRC = false;
 
   /** Whether to run blocking or non-blocking. */
-  private final boolean blocking;
+  private boolean blocking = true;
 
   // When "-diff s1 s2 src tgt" is passed, apply forward snapshot diff (from s1
   // to s2) of source cluster to the target cluster to sync target cluster with
   // the source cluster. Referred to as "Fdiff" in the code.
   // It's required that s2 is newer than s1.
-  private final boolean useDiff;
+  private boolean useDiff = false;
 
   // When "-rdiff s2 s1 src tgt" is passed, apply reversed snapshot diff (from
   // s2 to s1) of target cluster to the target cluster, so to make target
   // cluster go back to s1. Referred to as "Rdiff" in the code.
   // It's required that s2 is newer than s1, and src and tgt have exact same
   // content at their s1, if src is not the same as tgt.
-  private final boolean useRdiff;
+  private boolean useRdiff = false;
 
   /** Whether to log additional info (path, size) in the SKIP/COPY log. */
-  private final boolean verboseLog;
+  private boolean verboseLog = false;
 
   // For both -diff and -rdiff, given the example command line switches, two
   // steps are taken:
@@ -121,42 +121,42 @@ public final class DistCpOptions {
   //          could be the tgt itself (HDFS-9820).
   //
 
-  private final String fromSnapshot;
-  private final String toSnapshot;
+  private String fromSnapshot;
+  private String toSnapshot;
 
   /** The path to a file containing a list of paths to filter out of copy. */
-  private final String filtersFile;
+  private String filtersFile;
 
   /** Path where output logs are stored. If not specified, it will use the
    * default value JobStagingDir/_logs and delete upon job completion. */
-  private final Path logPath;
+  private Path logPath;
 
   /** Set the copy strategy to use. Should map to a strategy implementation
    * in distp-default.xml. */
-  private final String copyStrategy;
+  private String copyStrategy = DistCpConstants.UNIFORMSIZE;
 
   /** per map bandwidth in MB. */
-  private final float mapBandwidth;
+  private float mapBandwidth = DistCpConstants.DEFAULT_BANDWIDTH_MB;
 
   /** The number of threads to use for listStatus. We allow max
    * {@link #MAX_NUM_LISTSTATUS_THREADS} threads. Setting numThreads to zero
    * signify we should use the value from conf properties. */
-  private final int numListstatusThreads;
+  private int numListstatusThreads = 0;
 
   /** The max number of maps to use for copy. */
-  private final int maxMaps;
+  private int maxMaps = DistCpConstants.DEFAULT_MAPS;
 
   /** File attributes that need to be preserved. */
-  private final EnumSet<FileAttribute> preserveStatus;
+  private EnumSet<FileAttribute> preserveStatus = EnumSet.noneOf(FileAttribute.class);
 
   // Size of chunk in number of blocks when splitting large file into chunks
   // to copy in parallel. Default is 0 and file are not splitted.
-  private final int blocksPerChunk;
+  private int blocksPerChunk = 0;
 
-  private final int copyBufferSize;
+  private int copyBufferSize = DistCpConstants.COPY_BUFFER_SIZE_DEFAULT;
 
   /** Whether data should be written directly to the target paths. */
-  private final boolean directWrite;
+  private boolean directWrite = false;
 
   /**
    * File attributes for preserve.
@@ -440,6 +440,330 @@ public final class DistCpOptions {
         ", verboseLog=" + verboseLog +
         ", directWrite=" + directWrite +
         '}';
+  }
+
+  //restore Distcp mutable style for hadoop migration
+  //should only be called by hdp2 client code
+  /**
+   * Copy constructor.
+   * @param that DistCpOptions being copied from.
+   */
+  public DistCpOptions(DistCpOptions that) {
+    if (this != that && that != null) {
+      this.atomicCommit = that.atomicCommit;
+      this.syncFolder = that.syncFolder;
+      this.deleteMissing = that.deleteMissing;
+      this.ignoreFailures = that.ignoreFailures;
+      this.overwrite = that.overwrite;
+      this.skipCRC = that.skipCRC;
+      this.blocking = that.blocking;
+      this.useDiff = that.useDiff;
+      this.useRdiff = that.useRdiff;
+      this.numListstatusThreads = that.numListstatusThreads;
+      this.maxMaps = that.maxMaps;
+      this.mapBandwidth = that.mapBandwidth;
+      this.copyStrategy = that.copyStrategy;
+      this.preserveStatus = that.preserveStatus;
+      this.atomicWorkPath = that.getAtomicWorkPath();
+      this.logPath = that.getLogPath();
+      this.sourceFileListing = that.getSourceFileListing();
+      this.sourcePaths = that.getSourcePaths();
+      this.targetPath = that.getTargetPath();
+      this.filtersFile = that.getFiltersFile();
+    }
+  }
+
+  /**
+   * Constructor, to initialize source/target paths.
+   * @param sourcePaths List of source-paths (including wildcards)
+   *                     to be copied to target.
+   * @param targetPath Destination path for the dist-copy.
+   */
+  public DistCpOptions(List<Path> sourcePaths, Path targetPath) {
+    assert sourcePaths != null && !sourcePaths.isEmpty() : "Invalid source paths";
+    assert targetPath != null : "Invalid Target path";
+
+    this.sourcePaths = sourcePaths;
+    this.targetPath = targetPath;
+  }
+
+  /**
+   * Constructor, to initialize source/target paths.
+   * @param sourceFileListing File containing list of source paths
+   * @param targetPath Destination path for the dist-copy.
+   */
+  public DistCpOptions(Path sourceFileListing, Path targetPath) {
+    assert sourceFileListing != null : "Invalid source paths";
+    assert targetPath != null : "Invalid Target path";
+
+    this.sourceFileListing = sourceFileListing;
+    this.targetPath = targetPath;
+  }
+
+  /**
+   * Set if we want to append new data to target files. This is valid only with
+   * update option and CRC is not skipped.
+   */
+  public void setAppend(boolean append) {
+    validate(DistCpOptionSwitch.APPEND, append);
+    this.append = append;
+  }
+
+  /**
+   * Set if data need to be committed automatically
+   *
+   * @param atomicCommit - boolean switch
+   */
+  public void setAtomicCommit(boolean atomicCommit) {
+    validate(DistCpOptionSwitch.ATOMIC_COMMIT, atomicCommit);
+    this.atomicCommit = atomicCommit;
+  }
+
+  /**
+   * Set the work path for atomic commit
+   *
+   * @param atomicWorkPath - Path on the target cluster
+   */
+  public void setAtomicWorkPath(Path atomicWorkPath) {
+    this.atomicWorkPath = atomicWorkPath;
+  }
+
+  /**
+   * Set if Disctp should run blocking or non-blocking
+   *
+   * @param blocking - boolean switch
+   */
+  public void setBlocking(boolean blocking) {
+    this.blocking = blocking;
+  }
+
+  /**
+   * Set the copy strategy to use. Should map to a strategy implementation
+   * in distp-default.xml
+   *
+   * @param copyStrategy - copy Strategy to use
+   */
+  public void setCopyStrategy(String copyStrategy) {
+    this.copyStrategy = copyStrategy;
+  }
+
+  /**
+   * Set if files only present in target should be deleted
+   *
+   * @param deleteMissing - boolean switch
+   */
+  public void setDeleteMissing(boolean deleteMissing) {
+    validate(DistCpOptionSwitch.DELETE_MISSING, deleteMissing);
+    this.deleteMissing = deleteMissing;
+    ignoreDeleteMissingIfUseSnapshotDiff();
+  }
+
+  /**
+   * -delete and -diff are mutually exclusive.
+   * For backward compatibility, we ignore the -delete option here, instead of
+   * throwing an IllegalArgumentException. See HDFS-10397 for more discussion.
+   */
+  private void ignoreDeleteMissingIfUseSnapshotDiff() {
+    if (deleteMissing && (useDiff || useRdiff)) {
+      OptionsParser.LOG.warn("-delete and -diff/-rdiff are mutually exclusive. " +
+              "The -delete option will be ignored.");
+      deleteMissing = false;
+    }
+  }
+
+  /**
+   * Set filtersFile.
+   * @param filtersFilename The path to a list of patterns to exclude from copy.
+   */
+  public final void setFiltersFile(String filtersFilename) {
+    this.filtersFile = filtersFilename;
+  }
+
+  /**
+   * Set if failures during copy be ignored
+   *
+   * @param ignoreFailures - boolean switch
+   */
+  public void setIgnoreFailures(boolean ignoreFailures) {
+    this.ignoreFailures = ignoreFailures;
+  }
+
+  /**
+   * Set the log path where distcp output logs are stored
+   * Uses JobStagingDir/_logs by default
+   *
+   * @param logPath - Path where logs will be saved
+   */
+  public void setLogPath(Path logPath) {
+    this.logPath = logPath;
+  }
+
+  /**
+   * Set per map bandwidth
+   *
+   * @param mapBandwidth - per map bandwidth
+   */
+  public void setMapBandwidth(int mapBandwidth) {
+    assert mapBandwidth > 0 : "Bandwidth " + mapBandwidth + " is invalid (should be > 0)";
+    this.mapBandwidth = mapBandwidth;
+  }
+
+  /**
+   * Set the max number of maps to use for copy
+   *
+   * @param maxMaps - Number of maps
+   */
+  public void setMaxMaps(int maxMaps) {
+    this.maxMaps = Math.max(maxMaps, 1);
+  }
+
+  /** Set the number of threads to use for listStatus. We allow max 40
+   *  threads. Setting numThreads to zero signify we should use the value
+   *  from conf properties.
+   *
+   * @param numThreads - Number of threads
+   */
+  public void setNumListstatusThreads(int numThreads) {
+    if (numThreads > MAX_NUM_LISTSTATUS_THREADS) {
+      this.numListstatusThreads = MAX_NUM_LISTSTATUS_THREADS;
+    } else if (numThreads > 0) {
+      this.numListstatusThreads = numThreads;
+    } else {
+      this.numListstatusThreads = 0;
+    }
+  }
+
+  /**
+   * Set if files should always be overwritten on target
+   *
+   * @param overwrite - boolean switch
+   */
+  public void setOverwrite(boolean overwrite) {
+    validate(DistCpOptionSwitch.OVERWRITE, overwrite);
+    this.overwrite = overwrite;
+  }
+
+  /**
+   * Set if checksum comparison should be skipped while determining if
+   * source and destination files are identical
+   *
+   * @param skipCRC - boolean switch
+   */
+  public void setSkipCRC(boolean skipCRC) {
+    validate(DistCpOptionSwitch.SKIP_CRC, skipCRC);
+    this.skipCRC = skipCRC;
+  }
+
+  /**
+   * Setter for sourcePaths.
+   * @param sourcePaths The new list of source-paths.
+   */
+  public void setSourcePaths(List<Path> sourcePaths) {
+    assert sourcePaths != null && sourcePaths.size() != 0;
+    this.sourcePaths = sourcePaths;
+  }
+
+  /**
+   * Set if source and target folder contents be sync'ed up
+   *
+   * @param syncFolder - boolean switch
+   */
+  public void setSyncFolder(boolean syncFolder) {
+    validate(DistCpOptionSwitch.SYNC_FOLDERS, syncFolder);
+    this.syncFolder = syncFolder;
+  }
+
+  public void setUseDiff(String fromSS, String toSS) {
+    this.fromSnapshot = fromSS;
+    this.toSnapshot = toSS;
+    validate(DistCpOptionSwitch.DIFF, true);
+    this.useDiff = true;
+    ignoreDeleteMissingIfUseSnapshotDiff();
+  }
+
+  public void setUseRdiff(String fromSS, String toSS) {
+    this.fromSnapshot = fromSS;
+    this.toSnapshot = toSS;
+    validate(DistCpOptionSwitch.RDIFF, true);
+    this.useRdiff = true;
+    ignoreDeleteMissingIfUseSnapshotDiff();
+  }
+
+  /**
+   * Add file attributes that need to be preserved. This method may be
+   * called multiple times to add attributes.
+   *
+   * @param fileAttribute - Attribute to add, one at a time
+   */
+  public void preserve(FileAttribute fileAttribute) {
+    for (FileAttribute attribute : preserveStatus) {
+      if (attribute.equals(fileAttribute)) {
+        return;
+      }
+    }
+    preserveStatus.add(fileAttribute);
+  }
+
+  public void validate(DistCpOptionSwitch option, boolean value) {
+
+    boolean syncFolder = (option == DistCpOptionSwitch.SYNC_FOLDERS ?
+            value : this.syncFolder);
+    boolean overwrite = (option == DistCpOptionSwitch.OVERWRITE ?
+            value : this.overwrite);
+    boolean deleteMissing = (option == DistCpOptionSwitch.DELETE_MISSING ?
+            value : this.deleteMissing);
+    boolean atomicCommit = (option == DistCpOptionSwitch.ATOMIC_COMMIT ?
+            value : this.atomicCommit);
+    boolean skipCRC = (option == DistCpOptionSwitch.SKIP_CRC ?
+            value : this.skipCRC);
+    boolean append = (option == DistCpOptionSwitch.APPEND ? value : this.append);
+    boolean useDiff = (option == DistCpOptionSwitch.DIFF ? value : this.useDiff);
+    boolean useRdiff = (option == DistCpOptionSwitch.RDIFF ? value : this.useRdiff);
+
+    if (syncFolder && atomicCommit) {
+      throw new IllegalArgumentException("Atomic commit can't be used with " +
+              "sync folder or overwrite options");
+    }
+
+    if (deleteMissing && !(overwrite || syncFolder)) {
+      throw new IllegalArgumentException("Delete missing is applicable " +
+              "only with update or overwrite options");
+    }
+
+    if (overwrite && syncFolder) {
+      throw new IllegalArgumentException("Overwrite and update options are " +
+              "mutually exclusive");
+    }
+
+    if (!syncFolder && skipCRC) {
+      throw new IllegalArgumentException("Skip CRC is valid only with update options");
+    }
+
+    if (!syncFolder && append) {
+      throw new IllegalArgumentException(
+              "Append is valid only with update options");
+    }
+    if (skipCRC && append) {
+      throw new IllegalArgumentException(
+              "Append is disallowed when skipping CRC");
+    }
+    if (!syncFolder && (useDiff || useRdiff)) {
+      throw new IllegalArgumentException(
+              "-diff/-rdiff is valid only with -update option");
+    }
+
+    if (useDiff || useRdiff) {
+      if (StringUtils.isBlank(fromSnapshot) ||
+              StringUtils.isBlank(toSnapshot)) {
+        throw new IllegalArgumentException(
+                "Must provide both the starting and ending " +
+                        "snapshot names for -diff/-rdiff");
+      }
+    }
+    if (useDiff && useRdiff) {
+      throw new IllegalArgumentException(
+              "-diff and -rdiff are mutually exclusive");
+    }
   }
 
   /**
