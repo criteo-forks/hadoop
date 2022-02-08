@@ -17,7 +17,9 @@
  */
 package org.apache.hadoop.fs;
 
+import java.io.ByteArrayInputStream;
 import java.io.DataInput;
+import java.io.DataInputStream;
 import java.io.DataOutput;
 import java.io.IOException;
 import java.io.InvalidObjectException;
@@ -32,7 +34,11 @@ import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.fs.protocolPB.PBHelper;
+import org.apache.hadoop.io.IOUtils;
+import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Interface that represents the client side information for a file.
  */
@@ -40,6 +46,8 @@ import org.apache.hadoop.io.Writable;
 @InterfaceStability.Stable
 public class FileStatus implements Writable, Comparable<Object>,
     Serializable, ObjectInputValidation {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(FileStatus.class);
 
   private static final long serialVersionUID = 0x13caeae8;
 
@@ -480,29 +488,56 @@ public class FileStatus implements Writable, Comparable<Object>,
   @Override
   @Deprecated
   public void readFields(DataInput in) throws IOException {
-    int size = in.readInt();
-    if (size < 0) {
-      throw new IOException("Can't read FileStatusProto with negative " +
-          "size of " + size);
+    byte[] data = IOUtils.readFullyToByteArray(in);
+    try {
+      DataInput di = new DataInputStream(new ByteArrayInputStream(data));
+      int size = di.readInt();
+      if (size < 0) {
+        throw new IOException("Can't read FileStatusProto with negative " +
+                "size of " + size);
+      }
+      byte[] buf = new byte[size];
+      di.readFully(buf);
+      FileStatusProto proto = FileStatusProto.parseFrom(buf);
+      if (proto.getUnknownFields().asMap().size() > 0) {
+        throw new IOException("Parsed protobuf contains unknown fields");
+      }
+      FileStatus other = PBHelper.convert(proto);
+      isdir = other.isDirectory();
+      length = other.getLen();
+      block_replication = other.getReplication();
+      blocksize = other.getBlockSize();
+      modification_time = other.getModificationTime();
+      access_time = other.getAccessTime();
+      setPermission(other.getPermission());
+      setOwner(other.getOwner());
+      setGroup(other.getGroup());
+      setSymlink((other.isSymlink() ? other.getSymlink() : null));
+      setPath(other.getPath());
+      attr = attributes(other.hasAcl(), other.isEncrypted(),
+              other.isErasureCoded(), other.isSnapshotEnabled());
+      assert !(isDirectory() && isSymlink()) : "A directory cannot be a symlink";
+
+    } catch (IOException e) {
+      LOGGER.warn("Got exception while deserializing FileStatus. Will try an hadoop 2 deserialization.", e);
+      DataInput di = new DataInputStream(new ByteArrayInputStream(data));
+      String strPath = Text.readString(di, Text.DEFAULT_MAX_LEN);
+      this.path = new Path(strPath);
+      this.length = di.readLong();
+      this.isdir = di.readBoolean();
+      this.block_replication = di.readShort();
+      blocksize = di.readLong();
+      modification_time = di.readLong();
+      access_time = di.readLong();
+      permission.readFields(di);
+      owner = Text.readString(di, Text.DEFAULT_MAX_LEN);
+      group = Text.readString(di, Text.DEFAULT_MAX_LEN);
+      if (di.readBoolean()) {
+        this.symlink = new Path(Text.readString(di, Text.DEFAULT_MAX_LEN));
+      } else {
+        this.symlink = null;
+      }
     }
-    byte[] buf = new byte[size];
-    in.readFully(buf);
-    FileStatusProto proto = FileStatusProto.parseFrom(buf);
-    FileStatus other = PBHelper.convert(proto);
-    isdir = other.isDirectory();
-    length = other.getLen();
-    block_replication = other.getReplication();
-    blocksize = other.getBlockSize();
-    modification_time = other.getModificationTime();
-    access_time = other.getAccessTime();
-    setPermission(other.getPermission());
-    setOwner(other.getOwner());
-    setGroup(other.getGroup());
-    setSymlink((other.isSymlink() ? other.getSymlink() : null));
-    setPath(other.getPath());
-    attr = attributes(other.hasAcl(), other.isEncrypted(),
-        other.isErasureCoded(), other.isSnapshotEnabled());
-    assert !(isDirectory() && isSymlink()) : "A directory cannot be a symlink";
   }
 
   /**
@@ -529,7 +564,6 @@ public class FileStatus implements Writable, Comparable<Object>,
       throw new InvalidObjectException("No type in deserialized FileStatus");
     }
   }
-
 
 
 }
