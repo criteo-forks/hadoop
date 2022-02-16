@@ -521,7 +521,7 @@ public class FileStatus implements Writable, Comparable<Object>,
       byte secondByte = in.readByte();
       byte thirdByte = in.readByte();
       byte fourthByte = in.readByte();
-      int size = (secondByte << 16) + (thirdByte << 8) + fourthByte;
+      int size = ((secondByte & 0xFF) << 16) + ((thirdByte  & 0xFF) << 8) + (fourthByte & 0xFF);
       if (size < 0) {
         throw new IOException("Can't read FileStatusProto with negative " +
                 "size of " + size);
