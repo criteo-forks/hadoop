@@ -321,6 +321,20 @@ public final class WritableUtils  {
     return (isNegativeVInt(firstByte) ? (i ^ -1L) : i);
   }
 
+  public static long readVLong(byte firstByte, DataInput stream) throws IOException {
+    int len = decodeVIntSize(firstByte);
+    if (len == 1) {
+      return firstByte;
+    }
+    long i = 0;
+    for (int idx = 0; idx < len-1; idx++) {
+      byte b = stream.readByte();
+      i = i << 8;
+      i = i | (b & 0xFF);
+    }
+    return (isNegativeVInt(firstByte) ? (i ^ -1L) : i);
+  }
+
   /**
    * Reads a zero-compressed encoded integer from input stream and returns it.
    * @param stream Binary input stream
@@ -359,6 +373,24 @@ public final class WritableUtils  {
     if (n > upper) {
       throw new IOException("expected integer less or equal to " + upper +
           ", got " + n);
+    }
+    return (int)n;
+  }
+
+  public static int readVIntInRange(byte firstByte, DataInput stream, int lower, int upper)
+          throws IOException {
+    long n = readVLong(firstByte, stream);
+    if (n < lower) {
+      if (lower == 0) {
+        throw new IOException("expected non-negative integer, got " + n);
+      } else {
+        throw new IOException("expected integer greater than or equal to " +
+                lower + ", got " + n);
+      }
+    }
+    if (n > upper) {
+      throw new IOException("expected integer less or equal to " + upper +
+              ", got " + n);
     }
     return (int)n;
   }
