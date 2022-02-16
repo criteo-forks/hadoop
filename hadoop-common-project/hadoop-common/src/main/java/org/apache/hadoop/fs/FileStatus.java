@@ -17,9 +17,7 @@
  */
 package org.apache.hadoop.fs;
 
-import java.io.ByteArrayInputStream;
 import java.io.DataInput;
-import java.io.DataInputStream;
 import java.io.DataOutput;
 import java.io.IOException;
 import java.io.InvalidObjectException;
@@ -34,7 +32,6 @@ import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.fs.protocolPB.PBHelper;
-import org.apache.hadoop.io.IOUtils;
 import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
 import org.slf4j.Logger;
@@ -488,16 +485,49 @@ public class FileStatus implements Writable, Comparable<Object>,
   @Override
   @Deprecated
   public void readFields(DataInput in) throws IOException {
-    byte[] data = IOUtils.readFullyToByteArray(in);
-    try {
-      DataInput di = new DataInputStream(new ByteArrayInputStream(data));
-      int size = di.readInt();
+    //detect if hadoop 2 or hadoop 3 serialization
+    //this assume that hadoop3 protbuf serialization is smaller than 16Mo for a FileStatus, which make sense
+    //indeed for more than 16Mo, the int representing the protobuf byte size would be higher than 1 << 24
+    //we will use the fact that the way string are stored in hadoop2 (Text.writeString) touches the first byte with a value
+    //different than 0:
+    //   - either a negative value, to store string with more than 127 characters
+    //     (refer to WritableUtils class for VInt serialization details)
+    //   - either a positive value for a string of 1 character
+    //
+    //The possibility of having the first byte equal to 0 for Text.writeString is when the string is of size 0,
+    //which cannot happen for FileStatus as the first string is the path of the file, which is not empty
+    byte firstByte = in.readByte();
+    if(firstByte != 0) {
+      //case hadoop 2
+      LOGGER.info("Detected hadoop 2 serialization, based on first byte non 0");
+      String strPath = Text.readString(firstByte, in, Text.DEFAULT_MAX_LEN);
+      this.path = new Path(strPath);
+      this.length = in.readLong();
+      this.isdir = in.readBoolean();
+      this.block_replication = in.readShort();
+      blocksize = in.readLong();
+      modification_time = in.readLong();
+      access_time = in.readLong();
+      permission.readFields(in);
+      owner = Text.readString(in, Text.DEFAULT_MAX_LEN);
+      group = Text.readString(in, Text.DEFAULT_MAX_LEN);
+      if (in.readBoolean()) {
+        this.symlink = new Path(Text.readString(in, Text.DEFAULT_MAX_LEN));
+      } else {
+        this.symlink = null;
+      }
+    } else {
+      //case hadoop 3
+      byte secondByte = in.readByte();
+      byte thirdByte = in.readByte();
+      byte fourthByte = in.readByte();
+      int size = (secondByte << 16) + (thirdByte << 8) + fourthByte;
       if (size < 0) {
         throw new IOException("Can't read FileStatusProto with negative " +
                 "size of " + size);
       }
       byte[] buf = new byte[size];
-      di.readFully(buf);
+      in.readFully(buf);
       FileStatusProto proto = FileStatusProto.parseFrom(buf);
       if (proto.getUnknownFields().asMap().size() > 0) {
         throw new IOException("Parsed protobuf contains unknown fields");
@@ -517,26 +547,6 @@ public class FileStatus implements Writable, Comparable<Object>,
       attr = attributes(other.hasAcl(), other.isEncrypted(),
               other.isErasureCoded(), other.isSnapshotEnabled());
       assert !(isDirectory() && isSymlink()) : "A directory cannot be a symlink";
-
-    } catch (IOException e) {
-      LOGGER.warn("Got exception while deserializing FileStatus. Will try an hadoop 2 deserialization.", e);
-      DataInput di = new DataInputStream(new ByteArrayInputStream(data));
-      String strPath = Text.readString(di, Text.DEFAULT_MAX_LEN);
-      this.path = new Path(strPath);
-      this.length = di.readLong();
-      this.isdir = di.readBoolean();
-      this.block_replication = di.readShort();
-      blocksize = di.readLong();
-      modification_time = di.readLong();
-      access_time = di.readLong();
-      permission.readFields(di);
-      owner = Text.readString(di, Text.DEFAULT_MAX_LEN);
-      group = Text.readString(di, Text.DEFAULT_MAX_LEN);
-      if (di.readBoolean()) {
-        this.symlink = new Path(Text.readString(di, Text.DEFAULT_MAX_LEN));
-      } else {
-        this.symlink = null;
-      }
     }
   }
 
@@ -564,6 +574,5 @@ public class FileStatus implements Writable, Comparable<Object>,
       throw new InvalidObjectException("No type in deserialized FileStatus");
     }
   }
-
 
 }
