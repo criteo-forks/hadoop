@@ -158,6 +158,8 @@ public final class DistCpOptions {
   /** Whether data should be written directly to the target paths. */
   private boolean directWrite = false;
 
+  private boolean targetPathExists = true;
+
   /**
    * File attributes for preserve.
    *
@@ -764,6 +766,14 @@ public final class DistCpOptions {
       throw new IllegalArgumentException(
               "-diff and -rdiff are mutually exclusive");
     }
+  }
+
+  public void setTargetPathExists(boolean targetPathExists) {
+    this.targetPathExists = targetPathExists;
+  }
+
+  public boolean isTargetPathExists() {
+    return targetPathExists;
   }
 
   /**
