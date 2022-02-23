@@ -768,8 +768,8 @@ public final class DistCpOptions {
     }
   }
 
-  public void setTargetPathExists(boolean targetPathExists) {
-    this.targetPathExists = targetPathExists;
+  public boolean setTargetPathExists(boolean targetPathExists) {
+    return this.targetPathExists = targetPathExists;
   }
 
   public boolean isTargetPathExists() {
