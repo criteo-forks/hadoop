@@ -1138,6 +1138,8 @@ public abstract class TaskAttemptImpl implements
       myServiceData.put(entry.getKey(), entry.getValue().duplicate());
     }
 
+    myEnv.put("CONTAINER_HADOOP_CLASSPATH_VERSION", "3");
+
     // Construct the actual Container
     ContainerLaunchContext container = ContainerLaunchContext.newInstance(
         commonContainerSpec.getLocalResources(), myEnv, commands,
