@@ -74,6 +74,11 @@ public class FSDataOutputStream extends DataOutputStream
     }
   }
 
+  @Deprecated // Really deprecated!
+  public FSDataOutputStream(OutputStream out) throws IOException {
+    this(out, null);
+  }
+
   public FSDataOutputStream(OutputStream out, FileSystem.Statistics stats) {
     this(out, stats, 0);
   }
