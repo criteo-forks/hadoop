@@ -21,6 +21,7 @@ package org.apache.hadoop.io;
 import java.io.DataInput;
 import java.io.DataOutput;
 import java.io.IOException;
+import java.lang.reflect.Array;
 import java.util.Arrays;
 
 import org.apache.hadoop.classification.InterfaceAudience;
@@ -79,7 +80,11 @@ public class ArrayWritable implements Writable {
   }
 
   public Object toArray() {
-    return Arrays.copyOf(values, values.length);
+    Object result = Array.newInstance(valueClass, values.length);
+    for (int i = 0; i < values.length; i++) {
+      Array.set(result, i, values[i]);
+    }
+    return result;
   }
 
   public void set(Writable[] values) {
