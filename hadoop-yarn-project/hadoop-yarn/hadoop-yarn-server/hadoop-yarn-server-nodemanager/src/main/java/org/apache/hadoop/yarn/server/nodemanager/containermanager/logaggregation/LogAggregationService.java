@@ -26,8 +26,10 @@ import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeUnit;
 
+import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.security.token.SecretManager;
 
+import org.apache.hadoop.yarn.logaggregation.LogAggregationUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -256,11 +258,18 @@ public class LogAggregationService extends AbstractService implements
         getLogAggregationFileController(getConfig());
     logAggregationFileController.verifyAndCreateRemoteLogDir();
     // New application
+    Path remoteNodeLogFileForApp;
+    if(LogAggregationUtils.isOlderPathEnabled(this.getConfig())) {
+      remoteNodeLogFileForApp = logAggregationFileController.getOlderRemoteNodeLogFileForApp(appId,
+              user, nodeId);
+    } else {
+      remoteNodeLogFileForApp = logAggregationFileController.getRemoteNodeLogFileForApp(appId,
+              user, nodeId);
+    }
     final AppLogAggregator appLogAggregator =
         new AppLogAggregatorImpl(this.dispatcher, this.deletionService,
             getConfig(), appId, userUgi, this.nodeId, dirsHandler,
-            logAggregationFileController.getRemoteNodeLogFileForApp(appId,
-            user, nodeId), appAcls, logAggregationContext, this.context,
+            remoteNodeLogFileForApp, appAcls, logAggregationContext, this.context,
             getLocalFileContext(getConfig()), this.rollingMonitorInterval,
             recoveredLogInitedTime, logAggregationFileController);
     if (this.appLogAggregators.putIfAbsent(appId, appLogAggregator) != null) {

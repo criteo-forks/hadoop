@@ -55,6 +55,12 @@ public class LogAggregationUtils {
         getNodeString(nodeId));
   }
 
+  public static Path getOlderRemoteNodeLogFileForApp(Path remoteRootLogDir,
+                                                ApplicationId appId, String user, NodeId nodeId, String suffix) {
+    return new Path(getOlderRemoteAppLogDir(appId, user, remoteRootLogDir, suffix),
+            getNodeString(nodeId));
+  }
+
   /**
    * Gets the remote app log dir.
    * @param remoteRootLogDir the aggregated log remote root log dir
