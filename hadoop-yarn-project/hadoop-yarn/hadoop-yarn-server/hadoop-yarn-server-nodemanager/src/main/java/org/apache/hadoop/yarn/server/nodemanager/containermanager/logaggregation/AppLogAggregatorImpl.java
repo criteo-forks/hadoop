@@ -185,9 +185,15 @@ public class AppLogAggregatorImpl implements AppLogAggregator {
       this.logAggregationFileController.verifyAndCreateRemoteLogDir();
       this.logAggregationFileController.createAppDir(
           this.userUgi.getShortUserName(), appId, userUgi);
-      this.remoteNodeLogFileForApp = this.logAggregationFileController
-          .getRemoteNodeLogFileForApp(appId,
-              this.userUgi.getShortUserName(), nodeId);
+      if(LogAggregationUtils.isOlderPathEnabled(conf)) {
+        this.remoteNodeLogFileForApp = this.logAggregationFileController
+                .getOlderRemoteNodeLogFileForApp(appId,
+                        this.userUgi.getShortUserName(), nodeId);
+      } else {
+        this.remoteNodeLogFileForApp = this.logAggregationFileController
+                .getRemoteNodeLogFileForApp(appId,
+                        this.userUgi.getShortUserName(), nodeId);
+      }
       this.remoteNodeTmpLogFileForApp = getRemoteNodeTmpLogFileForApp();
     } else {
       this.logAggregationFileController = logAggregationFileController;
