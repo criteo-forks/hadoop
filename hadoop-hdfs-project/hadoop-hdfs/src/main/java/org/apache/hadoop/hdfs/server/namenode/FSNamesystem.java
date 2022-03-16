@@ -4290,7 +4290,7 @@ public class FSNamesystem implements Namesystem, FSNamesystemMBean,
           getFSImage().getCorrectLastAppliedOrWrittenTxId());
 
       return new HeartbeatResponse(cmds, haState, rollingUpgradeInfo,
-          blockReportLeaseId);
+          blockReportLeaseId, blockManager.getBlockIdManager().getGenerationStampAtblockIdSwitch());
     } finally {
       readUnlock("handleHeartbeat");
     }
@@ -7158,13 +7158,19 @@ public class FSNamesystem implements Namesystem, FSNamesystemMBean,
       }
       long startTime = now();
       if (!haEnabled) { // for non-HA, we require NN to be in safemode
-        startRollingUpgradeInternalForNonHA(startTime);
+        startRollingUpgradeInternalForNonHA(startTime,
+                blockManager.getBlockIdManager().getLastAllocatedContiguousBlockId(),
+                blockManager.getBlockIdManager().getLastAllocatedStripedBlockId());
       } else { // for HA, NN cannot be in safemode
         checkNameNodeSafeMode("Failed to start rolling upgrade");
-        startRollingUpgradeInternal(startTime);
+        startRollingUpgradeInternal(startTime,
+                blockManager.getBlockIdManager().getLastAllocatedContiguousBlockId(),
+                blockManager.getBlockIdManager().getLastAllocatedStripedBlockId());
       }
 
-      getEditLog().logStartRollingUpgrade(rollingUpgradeInfo.getStartTime());
+      getEditLog().logStartRollingUpgrade(rollingUpgradeInfo.getStartTime(),
+              rollingUpgradeInfo.getLastAllocatedContiguousBlockId(),
+              rollingUpgradeInfo.getLastAllocatedStripedBlockId());
       if (haEnabled) {
         // roll the edit log to make sure the standby NameNode can tail
         getFSImage().rollEditLog(getEffectiveLayoutVersion());
@@ -7182,11 +7188,11 @@ public class FSNamesystem implements Namesystem, FSNamesystemMBean,
    * Update internal state to indicate that a rolling upgrade is in progress.
    * @param startTime rolling upgrade start time
    */
-  void startRollingUpgradeInternal(long startTime)
+  void startRollingUpgradeInternal(long startTime, long lastAllocatedContiguousBlockId, long lastAllocatedStrippedBlockId)
       throws IOException {
     checkRollingUpgrade("start rolling upgrade");
     getFSImage().checkUpgrade();
-    setRollingUpgradeInfo(false, startTime);
+    setRollingUpgradeInfo(false, startTime, lastAllocatedContiguousBlockId, lastAllocatedStrippedBlockId);
   }
 
   /**
@@ -7194,7 +7200,7 @@ public class FSNamesystem implements Namesystem, FSNamesystemMBean,
    * non-HA setup. This requires the namesystem is in SafeMode and after doing a
    * checkpoint for rollback the namesystem will quit the safemode automatically 
    */
-  private void startRollingUpgradeInternalForNonHA(long startTime)
+  private void startRollingUpgradeInternalForNonHA(long startTime, long lastAllocatedContiguousBlockId, long lastAllocatedStrippedBlockId)
       throws IOException {
     Preconditions.checkState(!haEnabled);
     if (!isInSafeMode()) {
@@ -7209,12 +7215,12 @@ public class FSNamesystem implements Namesystem, FSNamesystemMBean,
 
     // leave SafeMode automatically
     setSafeMode(SafeModeAction.SAFEMODE_LEAVE);
-    setRollingUpgradeInfo(true, startTime);
+    setRollingUpgradeInfo(true, startTime, lastAllocatedContiguousBlockId, lastAllocatedStrippedBlockId);
   }
 
-  void setRollingUpgradeInfo(boolean createdRollbackImages, long startTime) {
+  void setRollingUpgradeInfo(boolean createdRollbackImages, long startTime, long lastAllocatedContiguousBlockId, long lastAllocatedStrippedBlockId) {
     rollingUpgradeInfo = new RollingUpgradeInfo(getBlockPoolId(),
-        createdRollbackImages, startTime, 0L);
+        createdRollbackImages, startTime, 0L, lastAllocatedContiguousBlockId, lastAllocatedStrippedBlockId);
   }
 
   public void setCreatedRollbackImages(boolean created) {

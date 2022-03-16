@@ -3001,8 +3001,10 @@ class FsDatasetImpl implements FsDatasetSpi<FsVolumeImpl> {
   }
 
   @Override
-  public void enableTrash(String bpid) {
-    dataStorage.enableTrash(bpid);
+  public void enableTrash(String bpid,  long rollingUpgradeLastAllocatedContiguousBlockId,
+                          long rollingUpgradeLastAllocatedStripedBlockId, long generationStampV1Limit) {
+    dataStorage.enableTrash(bpid, rollingUpgradeLastAllocatedContiguousBlockId,
+            rollingUpgradeLastAllocatedStripedBlockId, generationStampV1Limit);
   }
 
   @Override
