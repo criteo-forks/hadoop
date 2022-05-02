@@ -41,3 +41,8 @@ td.table { padding: 0 }
   line-height: 1.2em; font-size: 90% }
 #themeswitcher { margin: 1em 0.25em }
 #footer { padding: 1em; text-align: center }
+
+/* Avoid text wrapping in apps table */
+table.dataTable td {
+  white-space: nowrap;
+}

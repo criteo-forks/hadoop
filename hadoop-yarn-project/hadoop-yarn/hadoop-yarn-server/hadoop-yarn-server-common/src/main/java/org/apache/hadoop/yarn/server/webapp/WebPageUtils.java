@@ -61,6 +61,11 @@ public class WebPageUtils {
       // Update following line if any column added in RM page before column 11
       sb.append("{'sType':'num-ignore-str', ")
         .append("'aTargets': [12, 13, 14, 15, 16] },\n");
+      //avoid big app names and big app tags
+      sb.append(("{'aTargets': [2], 'mRender': ellipsis(60) },\n"));
+      sb.append(("{'aTargets': [4], 'mRender': ellipsis(20) },\n"));
+      //hide ApplicationPriority,ProgressBar and BlacklistedNodes
+      sb.append(("{'aTargets': [6, 19, 21], 'bVisible': false },\n"));
       // set progress column index to 19
       progressIndex = "[19]";
     } else if (isFairSchedulerPage) {
