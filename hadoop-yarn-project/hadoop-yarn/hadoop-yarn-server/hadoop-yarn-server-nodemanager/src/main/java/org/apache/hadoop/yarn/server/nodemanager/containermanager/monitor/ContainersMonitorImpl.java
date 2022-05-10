@@ -429,13 +429,13 @@ public class ContainersMonitorImpl extends AbstractService implements
       LOG.warn("Process tree for container: {} running over twice "
           + "the configured limit. Limit={}, current usage = {}",
           containerId, memLimit, currentMemUsage);
-      isOverLimit = true;
+      isOverLimit = false;
     } else if (curMemUsageOfAgedProcesses > memLimit) {
       LOG.warn("Process tree for container: {} has processes older than 1 "
           + "iteration running over the configured limit. "
           + "Limit={}, current usage = {}",
           containerId, memLimit, curMemUsageOfAgedProcesses);
-      isOverLimit = true;
+      isOverLimit = false;
     }
 
     return isOverLimit;
