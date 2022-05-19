@@ -96,6 +96,9 @@ public class AggregatedLogDeletionService extends AbstractService {
                         fs, rmClient);
                   }
                 }
+              } else if (suffixDir.isDirectory() && suffixDirPath.getName().
+                      startsWith("logs")) { //older structure
+                deleteOldLogDirsFrom(suffixDirPath, cutoffMillis, fs, rmClient);
               }
             }
           }
