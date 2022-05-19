@@ -161,9 +161,28 @@ public class TestCGroupsResourceCalculator {
           new File(procfs, CGroupsResourceCalculator.CGROUP),
               "6:cpuacct,cpu:/yarn/container_1\n" +
               "4:memory:/yarn/container_1\n", StandardCharsets.UTF_8);
+      //we don't write all lines of memory.stat,
+      //just add few ones to be sure they are correctly skipped
+      //we also want to make sure total_* is read, thus print non suffixe one
+      //and make sure the total does not originate from them
+      //in the end only total_rss and total_mapped_file should be used
       FileUtils.writeStringToFile(
           new File(cgMemoryContainerDir, CGroupsResourceCalculator.MEM_STAT),
-          "418496512\n", StandardCharsets.UTF_8);
+          "cache 1000000\n" +
+                "rss 2000000\n" +
+                "rss_huge 0\n" +
+                "shmem 172032\n" +
+                "mapped_file 100000\n" +
+                "total_cache 10000000\n" +
+                "total_rss 20000000\n" +
+                "total_rss_huge 4469030912\n" +
+                "total_shmem 2412544\n" +
+                "total_mapped_file 200000\n" +
+                "total_dirty 1060474880\n", StandardCharsets.UTF_8);
+      //some memory to be accounted also comes from kernel memory
+      FileUtils.writeStringToFile(
+              new File(cgMemoryContainerDir, CGroupsResourceCalculator.KMEM_STAT),
+                "10000\n", StandardCharsets.UTF_8);
 
       CGroupsResourceCalculator calculator =
           new CGroupsResourceCalculator(
@@ -174,7 +193,7 @@ public class TestCGroupsResourceCalculator {
       calculator.updateProcessTree();
       // Test the case where memsw is not available (Ubuntu)
       Assert.assertEquals("Incorrect memory usage",
-          418496512,
+          20210000,
           calculator.getRssMemorySize());
       Assert.assertEquals("Incorrect swap usage",
           (long)ResourceCalculatorProcessTree.UNAVAILABLE,
@@ -240,9 +259,28 @@ public class TestCGroupsResourceCalculator {
     Assert.assertTrue("Setup error", cgcpuacctRootDir.mkdirs());
     Assert.assertTrue("Setup error", cgMemoryRootDir.mkdirs());
     try {
+      //we don't write all lines of memory.stat,
+      //just add few ones to be sure they are correctly skipped
+      //we also want to make sure total_* is read, thus print non suffixe one
+      //and make sure the total does not originate from them
+      //in the end only total_rss and total_mapped_file should be used
       FileUtils.writeStringToFile(
-          new File(cgMemoryRootDir, CGroupsResourceCalculator.MEM_STAT),
-              "418496512\n", StandardCharsets.UTF_8);
+              new File(cgMemoryRootDir, CGroupsResourceCalculator.MEM_STAT),
+              "cache 1000000\n" +
+                      "rss 2000000\n" +
+                      "rss_huge 0\n" +
+                      "shmem 172032\n" +
+                      "mapped_file 100000\n" +
+                      "total_cache 10000000\n" +
+                      "total_rss 20000000\n" +
+                      "total_rss_huge 4469030912\n" +
+                      "total_shmem 2412544\n" +
+                      "total_mapped_file 200000\n" +
+                      "total_dirty 1060474880\n", StandardCharsets.UTF_8);
+      //some memory to be accounted also comes from kernel memory
+      FileUtils.writeStringToFile(
+              new File(cgMemoryRootDir, CGroupsResourceCalculator.KMEM_STAT),
+              "10000\n", StandardCharsets.UTF_8);
 
       CGroupsResourceCalculator calculator =
           new CGroupsResourceCalculator(
@@ -254,7 +292,7 @@ public class TestCGroupsResourceCalculator {
 
       // Test the case where memsw is not available (Ubuntu)
       Assert.assertEquals("Incorrect memory usage",
-          418496512,
+              20210000,
           calculator.getRssMemorySize());
       Assert.assertEquals("Incorrect swap usage",
           (long)ResourceCalculatorProcessTree.UNAVAILABLE,
