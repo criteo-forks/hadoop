@@ -76,7 +76,21 @@ import org.apache.hadoop.yarn.api.protocolrecords.GetContainerStatusesRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.StartContainerRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.StartContainersRequest;
 import org.apache.hadoop.yarn.api.protocolrecords.StopContainersRequest;
-import org.apache.hadoop.yarn.api.records.*;
+import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
+import org.apache.hadoop.yarn.api.records.ApplicationId;
+import org.apache.hadoop.yarn.api.records.ContainerExitStatus;
+import org.apache.hadoop.yarn.api.records.ContainerId;
+import org.apache.hadoop.yarn.api.records.ContainerLaunchContext;
+import org.apache.hadoop.yarn.api.records.ContainerState;
+import org.apache.hadoop.yarn.api.records.ContainerStatus;
+import org.apache.hadoop.yarn.api.records.LocalResource;
+import org.apache.hadoop.yarn.api.records.LocalResourceType;
+import org.apache.hadoop.yarn.api.records.LocalResourceVisibility;
+import org.apache.hadoop.yarn.api.records.NodeId;
+import org.apache.hadoop.yarn.api.records.Priority;
+import org.apache.hadoop.yarn.api.records.Resource;
+import org.apache.hadoop.yarn.api.records.Token;
+import org.apache.hadoop.yarn.api.records.URL;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.event.Dispatcher;
 import org.apache.hadoop.yarn.event.Event;
@@ -1101,10 +1115,9 @@ public class TestContainerLaunch extends BaseContainerManagerTest {
     // set up the rest of the container
     List<String> commands = Arrays.asList(Shell.getRunScriptCommand(scriptFile));
     containerLaunchContext.setCommands(commands);
-    Token containerToken = createContainerToken(cId, containerResource, Priority.newInstance(0), 0);
     StartContainerRequest scRequest =
         StartContainerRequest.newInstance(containerLaunchContext,
-          containerToken);
+            createContainerToken(cId, containerResource, Priority.newInstance(0), 0));
     List<StartContainerRequest> list = new ArrayList<StartContainerRequest>();
     list.add(scRequest);
     StartContainersRequest allRequests =
@@ -1429,14 +1442,14 @@ public class TestContainerLaunch extends BaseContainerManagerTest {
   protected Token createContainerToken(ContainerId cId, Resource r, Priority priority,
                                        long createTime) throws InvalidToken {
     ContainerTokenIdentifier containerTokenIdentifier =
-            new ContainerTokenIdentifier(cId, context.getNodeId().toString(), user,
-                    r, System.currentTimeMillis() + 10000L, 123, DUMMY_RM_IDENTIFIER,
-                    priority, createTime);
+        new ContainerTokenIdentifier(cId, context.getNodeId().toString(), user,
+            r, System.currentTimeMillis() + 10000L, 123, DUMMY_RM_IDENTIFIER,
+            priority, createTime);
     Token containerToken =
-            BuilderUtils.newContainerToken(
-                    context.getNodeId(),
-                    context.getContainerTokenSecretManager().retrievePassword(
-                            containerTokenIdentifier), containerTokenIdentifier);
+        BuilderUtils.newContainerToken(
+            context.getNodeId(),
+            context.getContainerTokenSecretManager().retrievePassword(
+                containerTokenIdentifier), containerTokenIdentifier);
     return containerToken;
   }
 
