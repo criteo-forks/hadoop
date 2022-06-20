@@ -22,6 +22,7 @@ import static org.apache.hadoop.fs.CreateFlag.CREATE;
 import static org.apache.hadoop.fs.CreateFlag.OVERWRITE;
 import static org.apache.hadoop.yarn.server.nodemanager.ContainerExecutor.TOKEN_FILE_NAME_FMT;
 
+import org.apache.hadoop.yarn.api.records.*;
 import org.apache.hadoop.yarn.server.nodemanager.executor.DeletionAsUserContext;
 
 import java.io.DataOutputStream;
@@ -30,18 +31,8 @@ import java.io.IOException;
 import java.io.PrintStream;
 import java.nio.ByteBuffer;
 import java.nio.charset.StandardCharsets;
-import java.util.ArrayList;
-import java.util.Collection;
-import java.util.Collections;
-import java.util.EnumSet;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.LinkedHashMap;
-import java.util.List;
-import java.util.LinkedHashSet;
-import java.util.Map;
+import java.util.*;
 import java.util.Map.Entry;
-import java.util.Set;
 import java.util.concurrent.Callable;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.locks.Lock;
@@ -61,10 +52,6 @@ import org.apache.hadoop.util.Shell;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.yarn.api.ApplicationConstants;
 import org.apache.hadoop.yarn.api.ApplicationConstants.Environment;
-import org.apache.hadoop.yarn.api.records.ContainerExitStatus;
-import org.apache.hadoop.yarn.api.records.ContainerId;
-import org.apache.hadoop.yarn.api.records.ContainerLaunchContext;
-import org.apache.hadoop.yarn.api.records.SignalContainerCommand;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.event.Dispatcher;
 import org.apache.hadoop.yarn.exceptions.ConfigurationException;
@@ -1619,6 +1606,11 @@ public class ContainerLaunch implements Callable<Integer> {
     addToEnvMap(environment, nmVars, Environment.CONTAINER_ID.name(),
         container.getContainerId().toString());
 
+    for (ResourceInformation resourceInformation : container.getResource().getResources()) {
+      addToEnvMap(environment, nmVars, "CONTAINER_RESOURCE_" + toEnvVarName(resourceInformation.getName()),
+              Long.toString(resourceInformation.getValue()));
+    }
+
     addToEnvMap(environment, nmVars, Environment.NM_PORT.name(),
       String.valueOf(this.context.getNodeId().getPort()));
 
@@ -1682,6 +1674,10 @@ public class ContainerLaunch implements Callable<Integer> {
           meta.getKey(), meta.getValue(), environment);
       nmVars.add(AuxiliaryServiceHelper.getPrefixServiceName(meta.getKey()));
     }
+  }
+
+  private String toEnvVarName(String s) {
+    return s.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9_]", "_");
   }
 
   private void sanitizeWindowsEnv(Map<String, String> environment, Path pwd,
