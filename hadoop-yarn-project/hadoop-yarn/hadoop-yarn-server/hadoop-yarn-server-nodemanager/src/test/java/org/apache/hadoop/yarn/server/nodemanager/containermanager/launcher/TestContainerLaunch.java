@@ -1117,7 +1117,7 @@ public class TestContainerLaunch extends BaseContainerManagerTest {
     containerLaunchContext.setCommands(commands);
     StartContainerRequest scRequest =
         StartContainerRequest.newInstance(containerLaunchContext,
-            createContainerToken(cId, containerResource, Priority.newInstance(0), 0));
+          createContainerToken(cId, containerResource, Priority.newInstance(0), 0));
     List<StartContainerRequest> list = new ArrayList<StartContainerRequest>();
     list.add(scRequest);
     StartContainersRequest allRequests =
@@ -1443,13 +1443,13 @@ public class TestContainerLaunch extends BaseContainerManagerTest {
                                        long createTime) throws InvalidToken {
     ContainerTokenIdentifier containerTokenIdentifier =
         new ContainerTokenIdentifier(cId, context.getNodeId().toString(), user,
-            r, System.currentTimeMillis() + 10000L, 123, DUMMY_RM_IDENTIFIER,
-            priority, createTime);
+          r, System.currentTimeMillis() + 10000L, 123, DUMMY_RM_IDENTIFIER,
+          priority, createTime);
     Token containerToken =
         BuilderUtils.newContainerToken(
-            context.getNodeId(),
-            context.getContainerTokenSecretManager().retrievePassword(
-                containerTokenIdentifier), containerTokenIdentifier);
+          context.getNodeId(),
+          context.getContainerTokenSecretManager().retrievePassword(
+            containerTokenIdentifier), containerTokenIdentifier);
     return containerToken;
   }
 
