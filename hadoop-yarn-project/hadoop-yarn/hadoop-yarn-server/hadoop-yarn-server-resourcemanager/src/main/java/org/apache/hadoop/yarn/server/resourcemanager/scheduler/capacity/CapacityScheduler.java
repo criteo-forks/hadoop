@@ -592,8 +592,11 @@ public class CapacityScheduler extends
             Thread.sleep(100);
           } else {
             // Don't run schedule if we have some pending backlogs already
-            if (cs.getAsyncSchedulingPendingBacklogs()
+            int asyncSchedulingPendingBacklogs = cs.getAsyncSchedulingPendingBacklogs();
+            CapacitySchedulerMetrics.getMetrics().setCommitterBacklogSize(asyncSchedulingPendingBacklogs);
+            if (asyncSchedulingPendingBacklogs
                 > cs.asyncMaxPendingBacklogs) {
+              CapacitySchedulerMetrics.getMetrics().incrAsyncSchedulingThreadPaused();
               Thread.sleep(1);
             } else{
               schedule(cs);

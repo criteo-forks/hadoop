@@ -18,15 +18,13 @@
 
 package org.apache.hadoop.yarn.server.resourcemanager.scheduler.capacity;
 
+import org.apache.hadoop.metrics2.lib.*;
 import org.apache.hadoop.thirdparty.com.google.common.annotations.VisibleForTesting;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.metrics2.MetricsInfo;
 import org.apache.hadoop.metrics2.MetricsSystem;
 import org.apache.hadoop.metrics2.annotation.Metric;
 import org.apache.hadoop.metrics2.annotation.Metrics;
-import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
-import org.apache.hadoop.metrics2.lib.MetricsRegistry;
-import org.apache.hadoop.metrics2.lib.MutableRate;
 
 import java.util.concurrent.atomic.AtomicBoolean;
 
@@ -49,6 +47,9 @@ public class CapacitySchedulerMetrics {
   @Metric("Scheduler commit success") MutableRate commitSuccess;
   @Metric("Scheduler commit failure") MutableRate commitFailure;
   @Metric("Scheduler node update") MutableRate nodeUpdate;
+  @Metric("Scheduler current committer backlog size") MutableGaugeLong committerBacklogSize;
+  @Metric("Scheduler max committer backlog size observed") MutableGaugeLong committerBacklogSizeMax;
+  @Metric("Scheduler async thread paused due to max committer backlog size limit reached") MutableCounterLong asyncSchedulingThreadPaused;
 
   private static volatile CapacitySchedulerMetrics INSTANCE = null;
   private static MetricsRegistry registry;
@@ -100,6 +101,17 @@ public class CapacitySchedulerMetrics {
 
   public void addNodeUpdate(long latency) {
     this.nodeUpdate.add(latency);
+  }
+
+  public void setCommitterBacklogSize(int size) {
+    this.committerBacklogSize.set(size);
+    if(size > committerBacklogSizeMax.value()) {
+      this.committerBacklogSizeMax.set(size);
+    }
+  }
+
+  public void incrAsyncSchedulingThreadPaused() {
+    this.asyncSchedulingThreadPaused.incr();
   }
 
   @VisibleForTesting
