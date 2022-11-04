@@ -2448,6 +2448,67 @@ int launch_container_as_user(const char *user, const char *app_id,
     return exit_code;
 }
 
+static int parse_int (const char *str, int *val)
+{
+  long num;
+  char *endptr;
+
+  errno = 0;
+  num = strtol(str, &endptr, 0);
+
+  if (errno)
+    return -errno;
+
+  if (endptr == str || *endptr != '\0')
+    return -EINVAL;
+
+  if (num < INT_MIN || num > INT_MAX)
+    return -EINVAL;
+
+  *val = num;
+  return 0;
+}
+
+static void signal_session (pid_t session, int sig)
+{
+  DIR *d;
+  int ret;
+  struct dirent *de;
+  pid_t sid, pid = 0;
+
+  d = opendir("/proc");
+  if (!d) {
+    fprintf(LOGFILE, "Error opening /proc\n");
+    return;
+  }
+
+  for (;;) {
+    de = readdir(d);
+    if (!de)
+      break;
+
+    if (de->d_name[0] < '0' || de->d_name[0] > '9')
+      continue;
+
+    ret = parse_int(de->d_name, &pid);
+    if (ret < 0)
+      continue;
+
+    sid = getsid(pid);
+    if (sid < 0)
+      continue;
+
+    if (sid != session)
+      continue;
+
+    ret = kill(pid, sig);
+    if (ret < 0)
+      fprintf(LOGFILE, "Error sending signal %d to pid %d (session %d): %m\n", sig, pid, sid);
+  }
+
+  closedir(d);
+}
+
 int signal_container_as_user(const char *user, int pid, int sig) {
   if(pid <= 0) {
     return INVALID_CONTAINER_PID;
@@ -2457,24 +2518,8 @@ int signal_container_as_user(const char *user, int pid, int sig) {
     return SETUID_OPER_FAILED;
   }
 
-  //Don't continue if the process-group is not alive anymore.
-  if (kill(-pid,0) < 0) {
-    fprintf(LOGFILE, "Error signalling not exist process group %d "
-            "with signal %d\n", pid, sig);
-    return INVALID_CONTAINER_PID;
-  }
-
-  if (kill(-pid, sig) < 0) {
-    if(errno != ESRCH) {
-      fprintf(LOGFILE,
-              "Error signalling process group %d with signal %d - %s\n",
-              -pid, sig, strerror(errno));
-      return UNABLE_TO_SIGNAL_CONTAINER;
-    } else {
-      return INVALID_CONTAINER_PID;
-    }
-  }
-  fprintf(LOGFILE, "Killing process group %d with %d\n", pid, sig);
+  fprintf(LOGFILE, "Signalling session %d with signal %d\n", pid, sig);
+  signal_session(pid, sig);
   return 0;
 }
 
