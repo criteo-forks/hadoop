@@ -2518,8 +2518,32 @@ int signal_container_as_user(const char *user, int pid, int sig) {
     return SETUID_OPER_FAILED;
   }
 
-  fprintf(LOGFILE, "Signalling session %d with signal %d\n", pid, sig);
-  signal_session(pid, sig);
+  //If we send SIGTERM or SIGKILL do it to the session id
+  //because processes that escaped the process groupid could be leaked
+  if (sig == SIGTERM || sig == SIGKILL) {
+    fprintf(LOGFILE, "Signalling session %d with signal %d\n", pid, sig);
+    signal_session(pid, sig);
+    return 0;
+  }
+
+  //Don't continue if the process-group is not alive anymore.
+  if (kill(-pid,0) < 0) {
+    fprintf(LOGFILE, "Error signalling not exist process group %d "
+            "with signal %d\n", pid, sig);
+    return INVALID_CONTAINER_PID;
+  }
+
+  if (kill(-pid, sig) < 0) {
+    if(errno != ESRCH) {
+      fprintf(LOGFILE,
+              "Error signalling process group %d with signal %d - %s\n",
+              -pid, sig, strerror(errno));
+      return UNABLE_TO_SIGNAL_CONTAINER;
+    } else {
+      return INVALID_CONTAINER_PID;
+    }
+  }
+  fprintf(LOGFILE, "Killing process group %d with %d\n", pid, sig);
   return 0;
 }
 
