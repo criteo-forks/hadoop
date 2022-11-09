@@ -105,7 +105,7 @@ public class TestQuorumJournalManager {
     conf.setInt(
         CommonConfigurationKeysPublic.IPC_CLIENT_CONNECTION_MAXIDLETIME_KEY, 0);
     conf.setBoolean(DFSConfigKeys.DFS_HA_TAILEDITS_INPROGRESS_KEY, true);
-    
+
     cluster = new MiniJournalCluster.Builder(conf)
         .baseDir(GenericTestUtils.getRandomizedTestDir().getAbsolutePath())
         .build();
@@ -1132,18 +1132,14 @@ public class TestQuorumJournalManager {
           String journalId, String nameServiceId, InetSocketAddress addr) {
         AsyncLogger logger = new IPCLoggerChannel(conf, nsInfo, journalId,
             nameServiceId, addr) {
-//          protected FifoMergingTaskExecutor createFifoRequestSender() {
-//            // Don't parallelize calls to the quorum in the tests.
-//            // This makes the tests more deterministic.
-//            FifoMergingTaskExecutor fifoMergingTaskExecutor = new FifoMergingTaskExecutor(true, 10000);
-//            fifoMergingTaskExecutor.setDaemon(true);
-//            fifoMergingTaskExecutor.start();
-//            return fifoMergingTaskExecutor;
-//          }
-
           @Override
-          protected FifoExecutor createFifoRequestSender() {
-            return new ExecutorServiceFifoExecutor(new DirectExecutorService());
+          protected FifoExecutor createFifoExecutor(boolean mergeEdits) {
+            // Don't parallelize calls to the quorum in the tests.
+            // This makes the tests more deterministic.
+            MergingTaskFifoExecutor fifoMergingTaskExecutor = new MergingTaskFifoExecutor(true, 10000);
+            fifoMergingTaskExecutor.setDaemon(true);
+            fifoMergingTaskExecutor.start();
+            return fifoMergingTaskExecutor;
           }
         };
         

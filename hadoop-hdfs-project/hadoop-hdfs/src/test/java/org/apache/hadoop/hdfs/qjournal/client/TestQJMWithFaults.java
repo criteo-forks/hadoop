@@ -399,7 +399,7 @@ public class TestQJMWithFaults {
     }
 
     @Override
-    protected MergingTaskFifoExecutor createFifoRequestSender() {
+    protected FifoExecutor createFifoExecutor(boolean mergeEdits) {
       // Don't parallelize calls to the quorum in the tests.
       // This makes the tests more deterministic.
       MergingTaskFifoExecutor mergingTaskFifoExecutor = new MergingTaskFifoExecutor(true, 10000);

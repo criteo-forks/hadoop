@@ -127,7 +127,7 @@ public class TestIPCLoggerChannel {
       public Boolean get() {
         return ch.getQueuedEditsSize() == 0;
       }
-    }, 10, 1000000);
+    }, 10, 1000);
   }
   
   /**

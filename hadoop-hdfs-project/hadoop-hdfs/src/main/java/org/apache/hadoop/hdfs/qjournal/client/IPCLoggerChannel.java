@@ -54,12 +54,19 @@ import org.apache.hadoop.io.DataOutputBuffer;
 import org.apache.hadoop.ipc.ProtobufRpcEngine2;
 import org.apache.hadoop.ipc.RPC;
 import org.apache.hadoop.security.SecurityUtil;
-import org.apache.hadoop.thirdparty.com.google.common.util.concurrent.*;
 import org.apache.hadoop.util.StopWatch;
 
 import org.apache.hadoop.thirdparty.com.google.common.annotations.VisibleForTesting;
 import org.apache.hadoop.thirdparty.com.google.common.base.Preconditions;
 import org.apache.hadoop.thirdparty.com.google.common.net.InetAddresses;
+import org.apache.hadoop.thirdparty.com.google.common.util.concurrent.FutureCallback;
+import org.apache.hadoop.thirdparty.com.google.common.util.concurrent.Futures;
+import org.apache.hadoop.thirdparty.com.google.common.util.concurrent.ListenableFuture;
+import org.apache.hadoop.thirdparty.com.google.common.util.concurrent.ListeningExecutorService;
+import org.apache.hadoop.thirdparty.com.google.common.util.concurrent.MoreExecutors;
+import org.apache.hadoop.thirdparty.com.google.common.util.concurrent.SettableFuture;
+import org.apache.hadoop.thirdparty.com.google.common.util.concurrent.ThreadFactoryBuilder;
+import org.apache.hadoop.thirdparty.com.google.common.util.concurrent.UncaughtExceptionHandlers;
 
 /**
  * Channel to a remote JournalNode using Hadoop IPC.
@@ -76,7 +83,7 @@ public class IPCLoggerChannel implements AsyncLogger {
   private QJournalProtocol proxy;
 
   /**
-   * Executes tasks submitted to it serially, on a single thread, in FIFO order
+   * Executes tasks submitted to it serially, in FIFO order
    * (generally used for write tasks that should not be reordered).
    */
   private final FifoExecutor fifoExecutor;
@@ -89,7 +96,7 @@ public class IPCLoggerChannel implements AsyncLogger {
   private long ipcSerial = 0;
   private long epoch = -1;
   private long committedTxId = HdfsServerConstants.INVALID_TXID;
-  
+
   private final String journalId;
   private final String nameServiceId;
 
@@ -98,12 +105,12 @@ public class IPCLoggerChannel implements AsyncLogger {
   private URL httpServerURL;
 
   private final IPCLoggerChannelMetrics metrics;
-  
+
   /**
    * The number of bytes of edits data still in the queue.
    */
   private int queuedEditsSizeBytes = 0;
-  
+
   /**
    * The highest txid that has been successfully logged on the remote JN.
    */
@@ -121,7 +128,7 @@ public class IPCLoggerChannel implements AsyncLogger {
    * of txns.
    */
   private long lastCommitNanos = 0;
-  
+
   /**
    * The maximum number of bytes that can be pending in the queue.
    * This keeps the writer from hitting OOME if one of the loggers
@@ -137,16 +144,16 @@ public class IPCLoggerChannel implements AsyncLogger {
    * the writer sets this flag to true to avoid sending useless RPCs.
    */
   private boolean outOfSync = false;
-  
+
   /**
    * Stopwatch which starts counting on each heartbeat that is sent
    */
   private final StopWatch lastHeartbeatStopwatch = new StopWatch();
-  
+
   private static final long HEARTBEAT_INTERVAL_MILLIS = 1000;
 
   private static final long WARN_JOURNAL_MILLIS_THRESHOLD = 1000;
-  
+
   static final Factory FACTORY = new AsyncLogger.Factory() {
     @Override
     public AsyncLogger createLogger(Configuration conf, NamespaceInfo nsInfo,
@@ -177,55 +184,29 @@ public class IPCLoggerChannel implements AsyncLogger {
         DFSConfigKeys.DFS_QJOURNAL_QUEUE_SIZE_LIMIT_DEFAULT);
 
     boolean mergeEdits = conf.getBoolean(
-            "dfs.qjournal.queued-edits." + addr.getHostName() + ".merge",
-            false
+        DFSConfigKeys.DFS_QJOURNAL_MERGE_SEND_EDIT_REQUESTS_KEY,
+        DFSConfigKeys.DFS_QJOURNAL_MERGE_SEND_EDIT_REQUESTS_DEFAULT
     );
 
-    if(mergeEdits) {
-      fifoExecutor = createFifoRequestSender();
-    } else {
-      fifoExecutor = createExecutorBasedRequestSender();
-    }
+    fifoExecutor = createFifoExecutor(mergeEdits);
+
     parallelExecutor = MoreExecutors.listeningDecorator(
         createParallelExecutor());
-    
+
     metrics = IPCLoggerChannelMetrics.create(this);
   }
 
   interface FifoExecutor {
     ListenableFuture<?> submit(Runnable r);
     <R> ListenableFuture<R> submit(Callable<R> c);
-    <R> ListenableFuture<R> submit(MergeableTask<R> c);
+    <R> ListenableFuture<R> submit(FifoExecutorTask<R> c);
     void shutdown();
   }
 
-  interface MergeableTask<R> {
+  interface FifoExecutorTask<R> {
     R run() throws Exception;
-    boolean canMergeWith(MergeableTask<?> mergeableTask);
-    <U> void merge(MergeableTask<U> mergeableTask) throws Exception;
-  }
-
-  static class CallableTask<R> implements MergeableTask<R> {
-
-    private final Callable<R> callable;
-
-    public CallableTask(Callable<R> c) {
-      this.callable = c;
-    }
-
-    @Override
-    public R run() throws Exception {
-      return callable.call();
-    }
-
-    @Override
-    public boolean canMergeWith(MergeableTask<?> mergeableTask) {
-      return false;
-    }
-
-    @Override
-    public <U> void merge(MergeableTask<U> mergeableTask) {
-    }
+    boolean canMergeWith(FifoExecutorTask<?> other);
+    <U> void merge(FifoExecutorTask<U> other) throws Exception;
   }
 
   static class MergingTaskFifoExecutor extends Thread implements FifoExecutor {
@@ -233,23 +214,23 @@ public class IPCLoggerChannel implements AsyncLogger {
     //special task used to stop the consumer thread
     private static FutureTask<Void> SHUTDOWN = new FutureTask<>(null);
 
-    private final boolean sync;
+    private final boolean isSynchronous;
     private final long syncTimeoutMs;
 
-    private ReentrantLock lock = new ReentrantLock(true);
-    private Condition notEmpty = lock.newCondition();
-    private Condition empty = lock.newCondition();
+    private final ReentrantLock lock = new ReentrantLock(true);
+    private final Condition notEmpty = lock.newCondition();
+    private final Condition empty = lock.newCondition();
 
     private boolean isShuttingDown = false;
 
-    private LinkedList<FutureTask<?>> tasks = new LinkedList<>();
+    private final LinkedList<FutureTask<?>> tasks = new LinkedList<>();
 
     public MergingTaskFifoExecutor() {
       this(false, 0);
     }
 
-    public MergingTaskFifoExecutor(boolean sync, long timeoutMs) {
-      this.sync = sync;
+    public MergingTaskFifoExecutor(boolean isSynchronous, long timeoutMs) {
+      this.isSynchronous = isSynchronous;
       this.syncTimeoutMs = timeoutMs;
     }
 
@@ -267,7 +248,7 @@ public class IPCLoggerChannel implements AsyncLogger {
       return submit(new CallableTask<>(c));
     }
 
-    public <T> ListenableFuture<T> submit(MergeableTask<T> mt) {
+    public <T> ListenableFuture<T> submit(FifoExecutorTask<T> mt) {
 
       FutureTask<T> ft = new FutureTask<>(mt);
 
@@ -299,7 +280,7 @@ public class IPCLoggerChannel implements AsyncLogger {
 
       //Useful for testing, make this synchronous
       //by waiting the future after submission
-      if(sync) {
+      if(isSynchronous) {
         try {
           ft.future.get(syncTimeoutMs, TimeUnit.MILLISECONDS);
         } catch (InterruptedException | TimeoutException | ExecutionException e) {
@@ -359,14 +340,20 @@ public class IPCLoggerChannel implements AsyncLogger {
       } finally {
         lock.unlock();
       }
+
+      try {
+        this.join();
+      } catch (InterruptedException e) {
+        Thread.currentThread().interrupt();
+      }
     }
 
     private static class FutureTask<R> {
 
-      private MergeableTask<R> mt;
+      private FifoExecutorTask<R> mt;
       private SettableFuture<R> future;
 
-      private FutureTask(MergeableTask<R> mt) {
+      private FutureTask(FifoExecutorTask<R> mt) {
         this.mt = mt;
         this.future = SettableFuture.create();
       }
@@ -380,6 +367,29 @@ public class IPCLoggerChannel implements AsyncLogger {
         }
       }
 
+    }
+
+    private static class CallableTask<R> implements FifoExecutorTask<R> {
+
+      private final Callable<R> callable;
+
+      public CallableTask(Callable<R> c) {
+        this.callable = c;
+      }
+
+      @Override
+      public R run() throws Exception {
+        return callable.call();
+      }
+
+      @Override
+      public boolean canMergeWith(FifoExecutorTask<?> other) {
+        return false;
+      }
+
+      @Override
+      public <U> void merge(FifoExecutorTask<U> other) {
+      }
     }
   }
 
@@ -402,7 +412,7 @@ public class IPCLoggerChannel implements AsyncLogger {
     }
 
     @Override
-    public <R> ListenableFuture<R> submit(MergeableTask<R> c) {
+    public <R> ListenableFuture<R> submit(FifoExecutorTask<R> c) {
       return executorService.submit(new Callable<R>() {
         @Override
         public R call() throws Exception {
@@ -417,7 +427,7 @@ public class IPCLoggerChannel implements AsyncLogger {
     }
   }
 
-  private final class SendEditsMergeableTask implements MergeableTask<Void> {
+  private final class SendEditsFifoExecutorTask implements FifoExecutorTask<Void> {
 
     private final byte[] originalData;
     private final long segmentTxId;
@@ -428,7 +438,7 @@ public class IPCLoggerChannel implements AsyncLogger {
     private long lastSubmitNanos;
     private final DataOutputBuffer buf;
 
-    private SendEditsMergeableTask(long segmentTxId, long firstTxnId, int numTxns, byte[] data, long submitNanos) throws IOException {
+    private SendEditsFifoExecutorTask(long segmentTxId, long firstTxnId, int numTxns, byte[] data, long submitNanos) throws IOException {
       this.segmentTxId = segmentTxId;
       this.firstTxnId = firstTxnId;
       this.numTxns = numTxns;
@@ -439,22 +449,22 @@ public class IPCLoggerChannel implements AsyncLogger {
     }
 
     @Override
-    public boolean canMergeWith(MergeableTask<?> mergeableTask) {
-      return mergeableTask instanceof SendEditsMergeableTask;
+    public boolean canMergeWith(FifoExecutorTask<?> other) {
+      return other instanceof SendEditsFifoExecutorTask;
     }
 
     @Override
-    public <U> void merge(MergeableTask<U> other) throws IOException {
-      SendEditsMergeableTask newSendEdits = (SendEditsMergeableTask) other;
+    public <U> void merge(FifoExecutorTask<U> other) throws IOException {
+      SendEditsFifoExecutorTask otherSendEdits = (SendEditsFifoExecutorTask) other;
 
-      Preconditions.checkArgument(newSendEdits.segmentTxId == this.segmentTxId,
+      Preconditions.checkArgument(otherSendEdits.segmentTxId == this.segmentTxId,
               "cannot merge edit stream from a different segmentTxId");
-      Preconditions.checkArgument(newSendEdits.firstTxnId > this.firstTxnId,
+      Preconditions.checkArgument(otherSendEdits.firstTxnId > this.firstTxnId,
               "cannot merge edit stream with smaller firstTxnId");
 
-      this.numTxns += newSendEdits.numTxns;
-      this.lastSubmitNanos = newSendEdits.lastSubmitNanos;
-      this.buf.write(newSendEdits.originalData);
+      this.numTxns += otherSendEdits.numTxns;
+      this.lastSubmitNanos = otherSendEdits.lastSubmitNanos;
+      this.buf.write(otherSendEdits.originalData);
     }
 
     @Override
@@ -503,12 +513,12 @@ public class IPCLoggerChannel implements AsyncLogger {
     }
 
   }
-  
+
   @Override
   public synchronized void setEpoch(long epoch) {
     this.epoch = epoch;
   }
-  
+
   @Override
   public synchronized void setCommittedTxId(long txid) {
     Preconditions.checkArgument(txid >= committedTxId,
@@ -517,7 +527,7 @@ public class IPCLoggerChannel implements AsyncLogger {
     this.committedTxId = txid;
     this.lastCommitNanos = System.nanoTime();
   }
-  
+
   @Override
   public void close() {
     // No more tasks may be submitted after this point.
@@ -531,22 +541,22 @@ public class IPCLoggerChannel implements AsyncLogger {
       RPC.stopProxy(proxy);
     }
   }
-  
+
   protected QJournalProtocol getProxy() throws IOException {
     if (proxy != null) return proxy;
     proxy = createProxy();
     return proxy;
   }
-  
+
   protected QJournalProtocol createProxy() throws IOException {
     final Configuration confCopy = new Configuration(conf);
-    
-    // Need to set NODELAY or else batches larger than MTU can trigger 
+
+    // Need to set NODELAY or else batches larger than MTU can trigger
     // 40ms nagling delays.
     confCopy.setBoolean(
         CommonConfigurationKeysPublic.IPC_CLIENT_TCPNODELAY_KEY,
         true);
-    
+
     RPC.setProtocolEngine(confCopy,
         QJournalProtocolPB.class, ProtobufRpcEngine2.class);
     return SecurityUtil.doAsLoginUser(
@@ -563,13 +573,21 @@ public class IPCLoggerChannel implements AsyncLogger {
           }
         });
   }
-  
-  
+
+
   /**
    * Separated out for easy overriding in tests.
    */
   @VisibleForTesting
-  protected FifoExecutor createFifoRequestSender() {
+  protected FifoExecutor createFifoExecutor(boolean mergeEdits) {
+    if (mergeEdits) {
+      return createMergingTaskFifoExecutor();
+    } else {
+      return createExecutorServiceFifoExecutor();
+    }
+  }
+
+  private FifoExecutor createMergingTaskFifoExecutor() {
     MergingTaskFifoExecutor mergingTaskFifoExecutor = new MergingTaskFifoExecutor();
     mergingTaskFifoExecutor.setDaemon(true);
     mergingTaskFifoExecutor.setName("Logger channel (from single-thread executor) to " + addr);
@@ -577,7 +595,7 @@ public class IPCLoggerChannel implements AsyncLogger {
     return mergingTaskFifoExecutor;
   }
 
-  private FifoExecutor createExecutorBasedRequestSender() {
+  private FifoExecutor createExecutorServiceFifoExecutor() {
     ExecutorService executorService = Executors.newSingleThreadExecutor(
             new ThreadFactoryBuilder()
                     .setDaemon(true)
@@ -604,13 +622,13 @@ public class IPCLoggerChannel implements AsyncLogger {
             .setUncaughtExceptionHandler(UncaughtExceptionHandlers.systemExit())
             .build());
   }
-  
+
   @Override
   public URL buildURLToFetchLogs(long segmentTxId) {
     Preconditions.checkArgument(segmentTxId > 0,
         "Invalid segment: %s", segmentTxId);
     Preconditions.checkState(hasHttpServerEndPoint(), "No HTTP/HTTPS endpoint");
-        
+
     try {
       String path = GetJournalEditServlet.buildPath(
           journalId, segmentTxId, nsInfo, true);
@@ -635,7 +653,7 @@ public class IPCLoggerChannel implements AsyncLogger {
   public synchronized int getQueuedEditsSize() {
     return queuedEditsSizeBytes;
   }
-  
+
   public InetSocketAddress getRemoteAddress() {
     return addr;
   }
@@ -648,7 +666,7 @@ public class IPCLoggerChannel implements AsyncLogger {
   public synchronized boolean isOutOfSync() {
     return outOfSync;
   }
-  
+
   @VisibleForTesting
   void waitForAllPendingCalls() throws InterruptedException {
     try {
@@ -696,7 +714,7 @@ public class IPCLoggerChannel implements AsyncLogger {
       }
     });
   }
-  
+
   @Override
   public ListenableFuture<Void> sendEdits(
       final long segmentTxId, final long firstTxnId,
@@ -706,13 +724,13 @@ public class IPCLoggerChannel implements AsyncLogger {
     } catch (LoggerTooFarBehindException e) {
       return Futures.immediateFailedFuture(e);
     }
-    
+
     // When this batch is acked, we use its submission time in order
     // to calculate how far we are lagging.
     final long submitNanos = System.nanoTime();
-    
+
     try {
-      ListenableFuture<Void> ret = fifoExecutor.submit(new SendEditsMergeableTask(segmentTxId, firstTxnId, numTxns, data, submitNanos));
+      ListenableFuture<Void> ret = fifoExecutor.submit(new SendEditsFifoExecutorTask(segmentTxId, firstTxnId, numTxns, data, submitNanos));
 
       // It was submitted to the queue, so adjust the length
       // once the call completes, regardless of whether it
