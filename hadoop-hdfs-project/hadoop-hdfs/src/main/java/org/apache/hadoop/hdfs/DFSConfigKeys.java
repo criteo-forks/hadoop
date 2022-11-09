@@ -1259,7 +1259,7 @@ public class DFSConfigKeys extends CommonConfigurationKeys {
   public static final int     DFS_QJOURNAL_QUEUE_SIZE_LIMIT_DEFAULT = 10;
   public static final String  DFS_QJOURNAL_MERGE_SEND_EDIT_REQUESTS_KEY = "dfs.qjournal.queued-edits.merge-send-edit-requests";
   public static final boolean DFS_QJOURNAL_MERGE_SEND_EDIT_REQUESTS_DEFAULT = true;
-
+  
   // Quorum-journal timeouts for various operations. Unlikely to need
   // to be tweaked, but configurable just in case.
   public static final String  DFS_QJOURNAL_START_SEGMENT_TIMEOUT_KEY = "dfs.qjournal.start-segment.timeout.ms";

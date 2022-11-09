@@ -736,7 +736,7 @@ public class IPCLoggerChannel implements AsyncLogger {
     // When this batch is acked, we use its submission time in order
     // to calculate how far we are lagging.
     final long submitNanos = System.nanoTime();
-
+    
     try {
       ListenableFuture<Void> ret = fifoExecutor.submit(new SendEditsFifoExecutorTask(segmentTxId, firstTxnId, numTxns, data, submitNanos));
       
