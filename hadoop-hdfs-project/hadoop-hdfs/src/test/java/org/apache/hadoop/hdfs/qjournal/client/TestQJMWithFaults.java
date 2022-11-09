@@ -36,7 +36,6 @@ import java.util.Random;
 import java.util.SortedSet;
 import java.util.concurrent.Callable;
 
-import org.apache.hadoop.hdfs.DFSConfigKeys;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -79,7 +78,6 @@ public class TestQJMWithFaults {
   private static final Configuration conf = new Configuration();
 
   static {
-    conf.set(DFSConfigKeys.DFS_QJM_OPERATIONS_TIMEOUT, "10000");
     // Don't retry connections - it just slows down the tests.
     conf.setInt(CommonConfigurationKeysPublic.IPC_CLIENT_CONNECT_MAX_RETRIES_KEY, 0);
     
