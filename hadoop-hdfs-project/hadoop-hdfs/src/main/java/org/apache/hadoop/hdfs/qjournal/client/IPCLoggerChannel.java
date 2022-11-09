@@ -104,7 +104,7 @@ public class IPCLoggerChannel implements AsyncLogger {
   private long ipcSerial = 0;
   private long epoch = -1;
   private long committedTxId = HdfsServerConstants.INVALID_TXID;
-
+  
   private final String journalId;
   private final String nameServiceId;
 
@@ -113,12 +113,12 @@ public class IPCLoggerChannel implements AsyncLogger {
   private URL httpServerURL;
 
   private final IPCLoggerChannelMetrics metrics;
-
+  
   /**
    * The number of bytes of edits data still in the queue.
    */
   private int queuedEditsSizeBytes = 0;
-
+  
   /**
    * The highest txid that has been successfully logged on the remote JN.
    */
@@ -136,7 +136,7 @@ public class IPCLoggerChannel implements AsyncLogger {
    * of txns.
    */
   private long lastCommitNanos = 0;
-
+  
   /**
    * The maximum number of bytes that can be pending in the queue.
    * This keeps the writer from hitting OOME if one of the loggers
@@ -152,16 +152,16 @@ public class IPCLoggerChannel implements AsyncLogger {
    * the writer sets this flag to true to avoid sending useless RPCs.
    */
   private boolean outOfSync = false;
-
+  
   /**
    * Stopwatch which starts counting on each heartbeat that is sent
    */
   private final StopWatch lastHeartbeatStopwatch = new StopWatch();
-
+  
   private static final long HEARTBEAT_INTERVAL_MILLIS = 1000;
 
   private static final long WARN_JOURNAL_MILLIS_THRESHOLD = 1000;
-
+  
   static final Factory FACTORY = new AsyncLogger.Factory() {
     @Override
     public AsyncLogger createLogger(Configuration conf, NamespaceInfo nsInfo,
@@ -190,7 +190,7 @@ public class IPCLoggerChannel implements AsyncLogger {
     this.queueSizeLimitBytes = 1024 * 1024 * conf.getInt(
         DFSConfigKeys.DFS_QJOURNAL_QUEUE_SIZE_LIMIT_KEY,
         DFSConfigKeys.DFS_QJOURNAL_QUEUE_SIZE_LIMIT_DEFAULT);
-
+    
     boolean mergeEdits = conf.getBoolean(
         DFSConfigKeys.DFS_QJOURNAL_MERGE_SEND_EDIT_REQUESTS_KEY,
         DFSConfigKeys.DFS_QJOURNAL_MERGE_SEND_EDIT_REQUESTS_DEFAULT
@@ -200,10 +200,10 @@ public class IPCLoggerChannel implements AsyncLogger {
 
     parallelExecutor = MoreExecutors.listeningDecorator(
         createParallelExecutor());
-
+    
     metrics = IPCLoggerChannelMetrics.create(this);
   }
-
+  
   interface FifoExecutor {
     ListenableFuture<?> submit(Runnable r);
     <R> ListenableFuture<R> submit(Callable<R> c);
@@ -521,12 +521,12 @@ public class IPCLoggerChannel implements AsyncLogger {
     }
 
   }
-
+  
   @Override
   public synchronized void setEpoch(long epoch) {
     this.epoch = epoch;
   }
-
+  
   @Override
   public synchronized void setCommittedTxId(long txid) {
     Preconditions.checkArgument(txid >= committedTxId,
@@ -535,7 +535,7 @@ public class IPCLoggerChannel implements AsyncLogger {
     this.committedTxId = txid;
     this.lastCommitNanos = System.nanoTime();
   }
-
+  
   @Override
   public void close() {
     // No more tasks may be submitted after this point.
@@ -549,22 +549,22 @@ public class IPCLoggerChannel implements AsyncLogger {
       RPC.stopProxy(proxy);
     }
   }
-
+  
   protected QJournalProtocol getProxy() throws IOException {
     if (proxy != null) return proxy;
     proxy = createProxy();
     return proxy;
   }
-
+  
   protected QJournalProtocol createProxy() throws IOException {
     final Configuration confCopy = new Configuration(conf);
-
+    
     // Need to set NODELAY or else batches larger than MTU can trigger
     // 40ms nagling delays.
     confCopy.setBoolean(
         CommonConfigurationKeysPublic.IPC_CLIENT_TCPNODELAY_KEY,
         true);
-
+    
     RPC.setProtocolEngine(confCopy,
         QJournalProtocolPB.class, ProtobufRpcEngine2.class);
     return SecurityUtil.doAsLoginUser(
@@ -581,8 +581,8 @@ public class IPCLoggerChannel implements AsyncLogger {
           }
         });
   }
-
-
+  
+  
   /**
    * Separated out for easy overriding in tests.
    */
@@ -630,13 +630,13 @@ public class IPCLoggerChannel implements AsyncLogger {
             .setUncaughtExceptionHandler(UncaughtExceptionHandlers.systemExit())
             .build());
   }
-
+  
   @Override
   public URL buildURLToFetchLogs(long segmentTxId) {
     Preconditions.checkArgument(segmentTxId > 0,
         "Invalid segment: %s", segmentTxId);
     Preconditions.checkState(hasHttpServerEndPoint(), "No HTTP/HTTPS endpoint");
-
+    
     try {
       String path = GetJournalEditServlet.buildPath(
           journalId, segmentTxId, nsInfo, true);
@@ -661,7 +661,7 @@ public class IPCLoggerChannel implements AsyncLogger {
   public synchronized int getQueuedEditsSize() {
     return queuedEditsSizeBytes;
   }
-
+  
   public InetSocketAddress getRemoteAddress() {
     return addr;
   }
@@ -674,7 +674,7 @@ public class IPCLoggerChannel implements AsyncLogger {
   public synchronized boolean isOutOfSync() {
     return outOfSync;
   }
-
+  
   @VisibleForTesting
   void waitForAllPendingCalls() throws InterruptedException {
     try {
@@ -722,7 +722,7 @@ public class IPCLoggerChannel implements AsyncLogger {
       }
     });
   }
-
+  
   @Override
   public ListenableFuture<Void> sendEdits(
       final long segmentTxId, final long firstTxnId,
@@ -732,14 +732,14 @@ public class IPCLoggerChannel implements AsyncLogger {
     } catch (LoggerTooFarBehindException e) {
       return Futures.immediateFailedFuture(e);
     }
-
+    
     // When this batch is acked, we use its submission time in order
     // to calculate how far we are lagging.
     final long submitNanos = System.nanoTime();
 
     try {
       ListenableFuture<Void> ret = fifoExecutor.submit(new SendEditsFifoExecutorTask(segmentTxId, firstTxnId, numTxns, data, submitNanos));
-
+      
       // It was submitted to the queue, so adjust the length
       // once the call completes, regardless of whether it
       // succeeds or fails.
@@ -748,19 +748,19 @@ public class IPCLoggerChannel implements AsyncLogger {
         public void onFailure(Throwable t) {
           unreserveQueueSpace(data.length);
         }
-
+      
         @Override
         public void onSuccess(Void t) {
           unreserveQueueSpace(data.length);
         }
       }, MoreExecutors.directExecutor());
-
+    
       return ret;
     } catch (IOException e) {
       unreserveQueueSpace(data.length);
       return Futures.immediateFailedFuture(e);
     }
-
+  
   }
 
   private void throwIfOutOfSync()
