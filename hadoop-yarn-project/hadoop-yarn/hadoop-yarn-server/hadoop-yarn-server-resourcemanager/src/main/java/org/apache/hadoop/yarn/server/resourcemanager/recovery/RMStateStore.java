@@ -42,6 +42,9 @@ import javax.crypto.SecretKey;
 import org.apache.hadoop.thirdparty.com.google.common.annotations.VisibleForTesting;
 import org.apache.hadoop.thirdparty.com.google.common.util.concurrent.SettableFuture;
 
+import org.apache.hadoop.yarn.metrics.GenericEventTypeMetrics;
+import org.apache.hadoop.yarn.server.resourcemanager.GenericEventTypeMetricsManager;
+import org.apache.hadoop.yarn.server.resourcemanager.NodesListManagerEventType;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.classification.InterfaceAudience.Private;
@@ -817,6 +820,12 @@ public abstract class RMStateStore extends AbstractService {
     epochRange = conf.getLong(YarnConfiguration.RM_EPOCH_RANGE,
         YarnConfiguration.DEFAULT_RM_EPOCH_RANGE);
     initInternal(conf);
+  
+    GenericEventTypeMetrics genericEventTypeMetrics =
+        GenericEventTypeMetricsManager.
+            create(dispatcher.getName(), RMStateStoreEventType.class);
+    dispatcher.addMetrics(genericEventTypeMetrics,
+        genericEventTypeMetrics.getEnumClass());
   }
 
   @Override
