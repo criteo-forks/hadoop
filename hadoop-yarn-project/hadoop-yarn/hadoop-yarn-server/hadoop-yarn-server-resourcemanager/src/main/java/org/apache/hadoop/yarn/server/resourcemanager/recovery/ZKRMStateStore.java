@@ -18,6 +18,10 @@
 
 package org.apache.hadoop.yarn.server.resourcemanager.recovery;
 
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.function.Consumer;
+import java.util.function.Function;
 import org.apache.hadoop.thirdparty.com.google.common.annotations.VisibleForTesting;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -294,6 +298,14 @@ public class ZKRMStateStore extends RMStateStore {
 
     return zkRootNodeAclList;
   }
+  
+  /**
+   * to be used prior to call of initInternal to inject a specific instance
+   * See DistributedZKRMStateStore
+   */
+  protected void setZkManager(ZKCuratorManager zkManager) {
+    this.zkManager = zkManager;
+  }
 
   @Override
   public synchronized void initInternal(Configuration conf)
@@ -367,9 +379,12 @@ public class ZKRMStateStore extends RMStateStore {
         getNodePath(zkRootNodePath, AMRMTOKEN_SECRET_MANAGER_ROOT);
     proxyCARoot = getNodePath(zkRootNodePath, PROXY_CA_ROOT);
     reservationRoot = getNodePath(zkRootNodePath, RESERVATION_SYSTEM_ROOT);
-    zkManager = resourceManager.getZKManager();
-    if(zkManager==null) {
-      zkManager = resourceManager.createAndStartZKManager(conf);
+    //the zkManager could have been injected, if that is not the case get it form the resourcemanager
+    if(zkManager == null) {
+      zkManager = resourceManager.getZKManager();
+      if (zkManager == null) {
+        zkManager = resourceManager.createAndStartZKManager(conf);
+      }
     }
     delegationTokenNodeSplitIndex =
         conf.getInt(YarnConfiguration.ZK_DELEGATION_TOKEN_NODE_SPLIT_INDEX,
@@ -518,246 +533,384 @@ public class ZKRMStateStore extends RMStateStore {
 
   @Override
   public synchronized RMState loadState() throws Exception {
+    long start = System.currentTimeMillis();
+    
     RMState rmState = new RMState();
     // recover DelegationTokenSecretManager
-    loadRMDTSecretManagerState(rmState);
+    CompletableFuture<Void> loadRMDTSecretManagerStateCompletion = loadRMDTSecretManagerState(rmState);
     // recover RM applications
-    loadRMAppState(rmState);
+    CompletableFuture<Void> loadRMAppStateCompletion = loadRMAppState(rmState);
     // recover AMRMTokenSecretManager
-    loadAMRMTokenSecretManagerState(rmState);
+    CompletableFuture<Void> loadAMRMTokenSecretManagerStateCompletion = loadAMRMTokenSecretManagerState(rmState);
     // recover reservation state
-    loadReservationSystemState(rmState);
+    CompletableFuture<Void> loadReservationSystemStateCompletion = loadReservationSystemState(rmState);
     // recover ProxyCAManager state
-    loadProxyCAManagerState(rmState);
+    CompletableFuture<Void> loadProxyCAManagerStateCompletion = loadProxyCAManagerState(rmState);
+    
+    CompletableFuture.allOf(
+        loadRMDTSecretManagerStateCompletion,
+        loadRMAppStateCompletion,
+        loadAMRMTokenSecretManagerStateCompletion,
+        loadReservationSystemStateCompletion,
+        loadProxyCAManagerStateCompletion
+    ).join();
+    
+    LOG.info("ZKRMStateStore loaded in " + (System.currentTimeMillis() - start) + "ms");
+    
     return rmState;
   }
+  
+  private static abstract class FallibleAction<U> implements Consumer<U> {
+    
+    protected abstract void with(U u) throws Exception;
+    
+    @Override
+    public void accept(U u) {
+      try {
+        with(u);
+      } catch (Exception e) {
+        throw new RuntimeException(e);
+      }
+    }
+  }
+  
+  private static abstract class FallibleFunction<U, V> implements Function<U, V> {
+  
+    protected abstract V transform(U u) throws Exception;
+    
+    @Override
+    public V apply(U u) {
+      try {
+        return transform(u);
+      } catch (Exception e) {
+        throw new RuntimeException(e);
+      }
+    }
+  }
 
-  private void loadReservationSystemState(RMState rmState) throws Exception {
-    List<String> planNodes = getChildren(reservationRoot);
-
-    for (String planName : planNodes) {
-      LOG.debug("Loading plan from znode: {}", planName);
-
-      String planNodePath = getNodePath(reservationRoot, planName);
-      List<String> reservationNodes = getChildren(planNodePath);
-
-      for (String reservationNodeName : reservationNodes) {
-        String reservationNodePath =
-            getNodePath(planNodePath, reservationNodeName);
-
-        LOG.debug("Loading reservation from znode: {}", reservationNodePath);
-
-        byte[] reservationData = getData(reservationNodePath);
+  private <U> CompletableFuture<Void> allOf(List<U> list, Function<U, CompletableFuture<Void>> function) {
+    List<CompletableFuture<Void>> cfs = new ArrayList<>();
+    for(U u : list) {
+      cfs.add(function.apply(u));
+    }
+    return CompletableFuture.allOf(cfs.toArray(new CompletableFuture[0]));
+  }
+  
+  private CompletableFuture<Void> loadReservationSystemState(RMState rmState) {
+    return getChildrenAsync(reservationRoot).thenCompose(planNodes ->
+      allOf(planNodes, planName -> loadReservationPlan(planName, rmState))
+    ).toCompletableFuture();
+  }
+  
+  private CompletableFuture<Void> loadReservationPlan(String planName, RMState rmState) {
+    LOG.debug("Loading plan from znode: {}", planName);
+    String planNodePath = getNodePath(reservationRoot, planName);
+    return getChildrenAsync(planNodePath).thenCompose(reservationNodes ->
+      allOf(reservationNodes, reservationNodeName -> loadReservationData(planName, planNodePath, reservationNodeName, rmState))
+    ).toCompletableFuture();
+  }
+  
+  private CompletableFuture<Void> loadReservationData(String planName, String planNodePath, String reservationNodeName, RMState rmState) {
+    String reservationNodePath = getNodePath(planNodePath, reservationNodeName);
+  
+    LOG.debug("Loading reservation from znode: {}", reservationNodePath);
+    return getDataAsync(reservationNodePath).thenAccept(new FallibleAction<byte[]>() {
+      @Override
+      protected void with(byte[] reservationData) throws Exception {
         ReservationAllocationStateProto allocationState =
             ReservationAllocationStateProto.parseFrom(reservationData);
-
-        if (!rmState.getReservationState().containsKey(planName)) {
-          rmState.getReservationState().put(planName, new HashMap<>());
-        }
-
-        ReservationId reservationId =
-            ReservationId.parseReservationId(reservationNodeName);
-        rmState.getReservationState().get(planName).put(reservationId,
-            allocationState);
-      }
-    }
-  }
-
-  private void loadAMRMTokenSecretManagerState(RMState rmState)
-      throws Exception {
-    byte[] data = getData(amrmTokenSecretManagerRoot);
-
-    if (data == null) {
-      LOG.warn("There is no data saved");
-    } else {
-      AMRMTokenSecretManagerStatePBImpl stateData =
-          new AMRMTokenSecretManagerStatePBImpl(
-            AMRMTokenSecretManagerStateProto.parseFrom(data));
-      rmState.amrmTokenSecretManagerState =
-          AMRMTokenSecretManagerState.newInstance(
-            stateData.getCurrentMasterKey(), stateData.getNextMasterKey());
-    }
-  }
-
-  private synchronized void loadRMDTSecretManagerState(RMState rmState)
-      throws Exception {
-    loadRMDelegationKeyState(rmState);
-    loadRMSequentialNumberState(rmState);
-    loadRMDelegationTokenState(rmState);
-  }
-
-  private void loadRMDelegationKeyState(RMState rmState) throws Exception {
-    List<String> childNodes = getChildren(dtMasterKeysRootPath);
-
-    for (String childNodeName : childNodes) {
-      String childNodePath = getNodePath(dtMasterKeysRootPath, childNodeName);
-      byte[] childData = getData(childNodePath);
-
-      if (childData == null) {
-        LOG.warn("Content of " + childNodePath + " is broken.");
-        continue;
-      }
-
-      ByteArrayInputStream is = new ByteArrayInputStream(childData);
-
-      try (DataInputStream fsIn = new DataInputStream(is)) {
-        if (childNodeName.startsWith(DELEGATION_KEY_PREFIX)) {
-          DelegationKey key = new DelegationKey();
-          key.readFields(fsIn);
-          rmState.rmSecretManagerState.masterKeyState.add(key);
-
-          LOG.debug("Loaded delegation key: keyId={}, expirationDate={}",
-              key.getKeyId(), key.getExpiryDate());
-
+  
+        synchronized (rmState) {
+          if (!rmState.getReservationState().containsKey(planName)) {
+            rmState.getReservationState().put(planName, new HashMap<>());
+          }
+    
+          ReservationId reservationId =
+              ReservationId.parseReservationId(reservationNodeName);
+          rmState.getReservationState().get(planName).put(reservationId,
+              allocationState);
         }
       }
-    }
+    }).toCompletableFuture();
   }
 
-  private void loadRMSequentialNumberState(RMState rmState) throws Exception {
-    byte[] seqData = getData(dtSequenceNumberPath);
+  private CompletableFuture<Void> loadAMRMTokenSecretManagerState(RMState rmState) {
+      return getDataAsync(amrmTokenSecretManagerRoot).thenAccept(new FallibleAction<byte[]>() {
+        @Override
+        protected void with(byte[] data) throws Exception {
+          if (data == null) {
+            LOG.warn("There is no data saved");
+          } else {
+            AMRMTokenSecretManagerStatePBImpl stateData =
+                new AMRMTokenSecretManagerStatePBImpl(
+                    AMRMTokenSecretManagerStateProto.parseFrom(data));
+            rmState.amrmTokenSecretManagerState =
+                AMRMTokenSecretManagerState.newInstance(
+                    stateData.getCurrentMasterKey(), stateData.getNextMasterKey());
+          }
+        }
+      }).toCompletableFuture();
+  }
 
-    if (seqData != null) {
-      ByteArrayInputStream seqIs = new ByteArrayInputStream(seqData);
+  private CompletableFuture<Void> loadRMDTSecretManagerState(RMState rmState) {
+    CompletableFuture<Void> loadRMDelegationKeyStateCompletion = loadRMDelegationKeyState(rmState);
+    CompletableFuture<Void> loadRMSequentialNumberStateCompletion = loadRMSequentialNumberState(rmState);
+    CompletableFuture<Void> loadRMDelegationTokenStateCompletion = loadRMDelegationTokenState(rmState);
+    
+    return CompletableFuture.allOf(
+        loadRMDelegationKeyStateCompletion,
+        loadRMSequentialNumberStateCompletion,
+        loadRMDelegationTokenStateCompletion
+    );
+  }
 
-      try (DataInputStream seqIn = new DataInputStream(seqIs)) {
-        rmState.rmSecretManagerState.dtSequenceNumber = seqIn.readInt();
+  private CompletableFuture<Void> loadRMDelegationKeyState(RMState rmState) {
+    return getChildrenAsync(dtMasterKeysRootPath).thenCompose(childNodes ->
+      allOf(childNodes, childNodeName -> loadRMDelegationMasterKeyState(childNodeName, rmState))
+    ).toCompletableFuture();
+  }
+  
+  private CompletableFuture<Void> loadRMDelegationMasterKeyState(String childNodeName, RMState rmState) {
+    String childNodePath = getNodePath(dtMasterKeysRootPath, childNodeName);
+    return getDataAsync(childNodePath).thenAccept(new FallibleAction<byte[]>() {
+      @Override
+      protected void with(byte[] childData) throws Exception {
+        if (childData == null) {
+          LOG.warn("Content of " + childNodePath + " is broken.");
+        } else {
+    
+          ByteArrayInputStream is = new ByteArrayInputStream(childData);
+    
+          try (DataInputStream fsIn = new DataInputStream(is)) {
+            if (childNodeName.startsWith(DELEGATION_KEY_PREFIX)) {
+              DelegationKey key = new DelegationKey();
+              key.readFields(fsIn);
+              
+              synchronized (rmState) {
+                rmState.rmSecretManagerState.masterKeyState.add(key);
+              }
+        
+              LOG.debug("Loaded delegation key: keyId={}, expirationDate={}",
+                  key.getKeyId(), key.getExpiryDate());
+        
+            }
+          }
+        }
       }
+    }).toCompletableFuture();
+  }
+
+  private CompletableFuture<Void> loadRMSequentialNumberState(RMState rmState) {
+    try {
+      byte[] seqData = getData(dtSequenceNumberPath);
+  
+      if (seqData != null) {
+        ByteArrayInputStream seqIs = new ByteArrayInputStream(seqData);
+  
+        try (DataInputStream seqIn = new DataInputStream(seqIs)) {
+          rmState.rmSecretManagerState.dtSequenceNumber = seqIn.readInt();
+        }
+      }
+      return CompletableFuture.completedFuture(null);
+    } catch (Exception e) {
+      CompletableFuture<Void> future = new CompletableFuture<>();
+      future.completeExceptionally(e);
+      return future;
     }
   }
 
-  private void loadRMDelegationTokenState(RMState rmState) throws Exception {
+  private CompletableFuture<Void> loadRMDelegationTokenState(RMState rmState) {
+    List<CompletableFuture<Void>> cfs = new ArrayList<>();
     for (int splitIndex = 0; splitIndex <= 4; splitIndex++) {
       String tokenRoot = rmDelegationTokenHierarchies.get(splitIndex);
       if (tokenRoot == null) {
         continue;
       }
-      List<String> childNodes = getChildren(tokenRoot);
-      boolean dtNodeFound = false;
-      for (String childNodeName : childNodes) {
-        if (childNodeName.startsWith(DELEGATION_TOKEN_PREFIX)) {
-          dtNodeFound = true;
-          String parentNodePath = getNodePath(tokenRoot, childNodeName);
-          if (splitIndex == 0) {
-            loadDelegationTokenFromNode(rmState, parentNodePath);
-          } else {
-            // If znode is partitioned.
-            List<String> leafNodes = getChildren(parentNodePath);
-            for (String leafNodeName : leafNodes) {
-              loadDelegationTokenFromNode(rmState,
-                  getNodePath(parentNodePath, leafNodeName));
-            }
+      int splitIndexCapture = splitIndex;
+      CompletableFuture<Void> cf = getChildrenAsync(tokenRoot).thenCompose(childNodes -> {
+        CompletableFuture<Boolean> dtNodeFoundFut = CompletableFuture.completedFuture(false);
+        for (String childNodeName: childNodes) {
+          dtNodeFoundFut = dtNodeFoundFut.thenCombine(loadDTChildNode(childNodeName, tokenRoot, splitIndexCapture, rmState), (l, r) -> l || r);
+        }
+        return dtNodeFoundFut;
+      }).thenAccept(dtNodeFound -> {
+        synchronized (rmDelegationTokenHierarchies) {
+          if (splitIndexCapture != delegationTokenNodeSplitIndex && !dtNodeFound) {
+            // If no loaded delegation token exists for a particular split index and
+            // the split index for which tokens are being loaded is not the one
+            // configured, then we do not need to keep track of this hierarchy for
+            // storing/updating/removing delegation token znodes.
+            rmDelegationTokenHierarchies.remove(splitIndexCapture);
           }
-        } else if (splitIndex == 0
-            && !(childNodeName.equals("1") || childNodeName.equals("2")
-            || childNodeName.equals("3") || childNodeName.equals("4"))) {
-          LOG.debug("Unknown child node with name {} under {}",
-              childNodeName, tokenRoot);
+        }
+      }).toCompletableFuture();
+      
+      cfs.add(cf);
+    }
+  
+    return CompletableFuture.allOf(cfs.toArray(new CompletableFuture[0]));
+  }
+  
+  private CompletableFuture<Boolean> loadDTChildNode(String childNodeName, String tokenRoot, int splitIndex, RMState rmState) {
+    if (childNodeName.startsWith(DELEGATION_TOKEN_PREFIX)) {
+      CompletableFuture<Void> cf;
+      String parentNodePath = getNodePath(tokenRoot, childNodeName);
+      if (splitIndex == 0) {
+        cf = loadDelegationTokenFromNode(rmState, parentNodePath);
+      } else {
+        // If znode is partitioned.
+        cf = getChildrenAsync(parentNodePath).thenCompose(leafNodes ->
+          allOf(leafNodes, leafNodeName -> loadDelegationTokenFromNode(rmState,
+              getNodePath(parentNodePath, leafNodeName)))
+        ).toCompletableFuture();
+      }
+      return cf.thenApply(ignored -> true);
+    } else if (splitIndex == 0
+        && !(childNodeName.equals("1") || childNodeName.equals("2")
+        || childNodeName.equals("3") || childNodeName.equals("4"))) {
+      LOG.debug("Unknown child node with name {} under {}",
+          childNodeName, tokenRoot);
+      return CompletableFuture.completedFuture(false);
+    } else {
+      return CompletableFuture.completedFuture(false);
+    }
+  }
+
+  private CompletableFuture<Void> loadDelegationTokenFromNode(RMState rmState, String path) {
+    return getDataAsync(path).thenAccept(new FallibleAction<byte[]>() {
+      @Override
+      protected void with(byte[] data) throws Exception {
+        if (data == null) {
+          LOG.warn("Content of " + path + " is broken.");
+        } else {
+          ByteArrayInputStream is = new ByteArrayInputStream(data);
+          try (DataInputStream fsIn = new DataInputStream(is)) {
+            RMDelegationTokenIdentifierData identifierData =
+                RMStateStoreUtils.readRMDelegationTokenIdentifierData(fsIn);
+            RMDelegationTokenIdentifier identifier =
+                identifierData.getTokenIdentifier();
+            long renewDate = identifierData.getRenewDate();
+            
+            synchronized (rmState) {
+              rmState.rmSecretManagerState.delegationTokenState.put(identifier,
+                  renewDate);
+            }
+            
+            LOG.debug("Loaded RMDelegationTokenIdentifier: {} renewDate={}",
+                identifier, renewDate);
+          }
         }
       }
-      if (splitIndex != delegationTokenNodeSplitIndex && !dtNodeFound) {
-        // If no loaded delegation token exists for a particular split index and
-        // the split index for which tokens are being loaded is not the one
-        // configured, then we do not need to keep track of this hierarchy for
-        // storing/updating/removing delegation token znodes.
-        rmDelegationTokenHierarchies.remove(splitIndex);
+    }).toCompletableFuture();
+  }
+
+  private CompletableFuture<Void> loadRMAppStateFromAppNode(RMState rmState, String appNodePath,
+      String appIdStr) {
+    return getDataAsync(appNodePath).thenCompose(new FallibleFunction<byte[], CompletionStage<Void>>() {
+      @Override
+      protected CompletionStage<Void> transform(byte[] appData) throws Exception {
+        LOG.debug("Loading application from znode: {}", appNodePath);
+        ApplicationId appId = ApplicationId.fromString(appIdStr);
+        ApplicationStateDataPBImpl appState = new ApplicationStateDataPBImpl(
+            ApplicationStateDataProto.parseFrom(appData));
+        if (!appId.equals(
+            appState.getApplicationSubmissionContext().getApplicationId())) {
+          throw new YarnRuntimeException("The node name is different from the " +
+              "application id");
+        }
+  
+        synchronized (rmState) {
+          rmState.appState.put(appId, appState);
+        }
+  
+        return loadApplicationAttemptState(appState, appNodePath);
       }
-    }
+    }).toCompletableFuture();
   }
 
-  private void loadDelegationTokenFromNode(RMState rmState, String path)
-      throws Exception {
-    byte[] data = getData(path);
-    if (data == null) {
-      LOG.warn("Content of " + path + " is broken.");
-    } else {
-      ByteArrayInputStream is = new ByteArrayInputStream(data);
-      try (DataInputStream fsIn = new DataInputStream(is)) {
-        RMDelegationTokenIdentifierData identifierData =
-            RMStateStoreUtils.readRMDelegationTokenIdentifierData(fsIn);
-        RMDelegationTokenIdentifier identifier =
-            identifierData.getTokenIdentifier();
-        long renewDate = identifierData.getRenewDate();
-        rmState.rmSecretManagerState.delegationTokenState.put(identifier,
-            renewDate);
-        LOG.debug("Loaded RMDelegationTokenIdentifier: {} renewDate={}",
-            identifier, renewDate);
-      }
-    }
-  }
-
-  private void loadRMAppStateFromAppNode(RMState rmState, String appNodePath,
-      String appIdStr) throws Exception {
-    byte[] appData = getData(appNodePath);
-    LOG.debug("Loading application from znode: {}", appNodePath);
-    ApplicationId appId = ApplicationId.fromString(appIdStr);
-    ApplicationStateDataPBImpl appState = new ApplicationStateDataPBImpl(
-        ApplicationStateDataProto.parseFrom(appData));
-    if (!appId.equals(
-        appState.getApplicationSubmissionContext().getApplicationId())) {
-      throw new YarnRuntimeException("The node name is different from the " +
-             "application id");
-    }
-    rmState.appState.put(appId, appState);
-    loadApplicationAttemptState(appState, appNodePath);
-  }
-
-  private synchronized void loadRMAppState(RMState rmState) throws Exception {
+  private CompletableFuture<Void> loadRMAppState(RMState rmState) {
+    List<CompletableFuture<Void>> cfs = new ArrayList<>();
     for (int splitIndex = 0; splitIndex <= 4; splitIndex++) {
       String appRoot = rmAppRootHierarchies.get(splitIndex);
       if (appRoot == null) {
         continue;
       }
-      List<String> childNodes = getChildren(appRoot);
-      boolean appNodeFound = false;
-      for (String childNodeName : childNodes) {
-        if (childNodeName.startsWith(ApplicationId.appIdStrPrefix)) {
-          appNodeFound = true;
-          if (splitIndex == 0) {
-            loadRMAppStateFromAppNode(rmState,
-                getNodePath(appRoot, childNodeName), childNodeName);
-          } else {
-            // If AppId Node is partitioned.
-            String parentNodePath = getNodePath(appRoot, childNodeName);
-            List<String> leafNodes = getChildren(parentNodePath);
-            for (String leafNodeName : leafNodes) {
-              String appIdStr = childNodeName + leafNodeName;
-              loadRMAppStateFromAppNode(rmState,
-                  getNodePath(parentNodePath, leafNodeName), appIdStr);
-            }
-          }
-        } else if (!childNodeName.equals(RM_APP_ROOT_HIERARCHIES)){
-          LOG.debug("Unknown child node with name {} under {}", childNodeName,
-              appRoot);
+      int splitIndexCapture = splitIndex;
+      CompletableFuture<Void> cf = getChildrenAsync(appRoot).thenCompose(childNodes -> {
+        CompletableFuture<Boolean> appNodeFoundFut = CompletableFuture.completedFuture(false);
+        for (String childNodeName: childNodes) {
+          appNodeFoundFut = appNodeFoundFut.thenCombine(loadApplicationChildNode(childNodeName, appRoot, splitIndexCapture, rmState), (l,r) -> l || r);
         }
+        return appNodeFoundFut;
+      }).thenAccept(appNodeFound -> {
+        synchronized (rmAppRootHierarchies) {
+          if (splitIndexCapture != appIdNodeSplitIndex && !appNodeFound) {
+            // If no loaded app exists for a particular split index and the split
+            // index for which apps are being loaded is not the one configured, then
+            // we do not need to keep track of this hierarchy for storing/updating/
+            // removing app/app attempt znodes.
+            rmAppRootHierarchies.remove(splitIndexCapture);
+          }
+        }
+      }).toCompletableFuture();
+      
+      cfs.add(cf);
+    }
+    
+    return CompletableFuture.allOf(cfs.toArray(new CompletableFuture[0]));
+  }
+  
+  private CompletableFuture<Boolean> loadApplicationChildNode(String childNodeName, String appRoot, int splitIndex, RMState rmState) {
+    if (childNodeName.startsWith(ApplicationId.appIdStrPrefix)) {
+      CompletableFuture<Void> cf;
+      String parentNodePath = getNodePath(appRoot, childNodeName);
+      if (splitIndex == 0) {
+        cf = loadRMAppStateFromAppNode(rmState, parentNodePath, childNodeName);
+      } else {
+        // If AppId Node is partitioned.
+        cf = getChildrenAsync(parentNodePath).thenCompose(leafNodes ->
+            allOf(leafNodes, leafNodeName -> {
+              String appIdStr = childNodeName + leafNodeName;
+              return loadRMAppStateFromAppNode(rmState,
+                  getNodePath(parentNodePath, leafNodeName), appIdStr);
+            })
+        ).toCompletableFuture();
       }
-      if (splitIndex != appIdNodeSplitIndex && !appNodeFound) {
-        // If no loaded app exists for a particular split index and the split
-        // index for which apps are being loaded is not the one configured, then
-        // we do not need to keep track of this hierarchy for storing/updating/
-        // removing app/app attempt znodes.
-        rmAppRootHierarchies.remove(splitIndex);
-      }
+      return cf.thenApply(ignored -> true);
+    } else if (!childNodeName.equals(RM_APP_ROOT_HIERARCHIES)){
+      LOG.debug("Unknown child node with name {} under {}", childNodeName,
+          appRoot);
+      return CompletableFuture.completedFuture(false);
+    } else {
+      return CompletableFuture.completedFuture(false);
     }
   }
 
-  private void loadApplicationAttemptState(ApplicationStateData appState,
-      String appPath) throws Exception {
-    List<String> attempts = getChildren(appPath);
-
-    for (String attemptIDStr : attempts) {
-      if (attemptIDStr.startsWith(ApplicationAttemptId.appAttemptIdStrPrefix)) {
-        String attemptPath = getNodePath(appPath, attemptIDStr);
-        byte[] attemptData = getData(attemptPath);
-
-        ApplicationAttemptStateDataPBImpl attemptState =
-            new ApplicationAttemptStateDataPBImpl(
-                ApplicationAttemptStateDataProto.parseFrom(attemptData));
-
-        appState.attempts.put(attemptState.getAttemptId(), attemptState);
-      }
+  private CompletableFuture<Void> loadApplicationAttemptState(ApplicationStateData appState,
+      String appPath) {
+    return getChildrenAsync(appPath).thenCompose(attempts ->
+        allOf(attempts, attemptIDStr -> loadApplicationAttempt(attemptIDStr, appPath, appState))
+    ).thenRun(() -> LOG.debug("Done loading applications from ZK state store")).toCompletableFuture();
+  }
+  
+  private CompletableFuture<Void> loadApplicationAttempt(String attemptIDStr, String appPath, ApplicationStateData appState) {
+    if (attemptIDStr.startsWith(ApplicationAttemptId.appAttemptIdStrPrefix)) {
+      String attemptPath = getNodePath(appPath, attemptIDStr);
+      return getDataAsync(attemptPath).thenAccept(new FallibleAction<byte[]>() {
+        @Override
+        protected void with(byte[] attemptData) throws Exception {
+          ApplicationAttemptStateDataPBImpl attemptState =
+              new ApplicationAttemptStateDataPBImpl(
+                  ApplicationAttemptStateDataProto.parseFrom(attemptData));
+  
+          synchronized (appState) {
+            appState.attempts.put(attemptState.getAttemptId(), attemptState);
+          }
+        }
+      }).toCompletableFuture();
+    } else {
+      return CompletableFuture.completedFuture(null);
     }
-    LOG.debug("Done loading applications from ZK state store");
   }
 
   /**
@@ -809,26 +962,45 @@ public class ZKRMStateStore extends RMStateStore {
     }
   }
 
-  private void loadProxyCAManagerState(RMState rmState) throws Exception {
-    String caCertPath = getNodePath(proxyCARoot, PROXY_CA_CERT_NODE);
-    String caPrivateKeyPath = getNodePath(proxyCARoot,
-        PROXY_CA_PRIVATE_KEY_NODE);
-
-    if (!exists(caCertPath) || !exists(caPrivateKeyPath)) {
-      LOG.warn("Couldn't find Proxy CA data");
-      return;
-    }
-
-    byte[] caCertData = getData(caCertPath);
-    byte[] caPrivateKeyData = getData(caPrivateKeyPath);
-
-    if (caCertData == null || caPrivateKeyData == null) {
-      LOG.warn("Couldn't recover Proxy CA data");
-      return;
-    }
-
-    rmState.getProxyCAState().setCaCert(caCertData);
-    rmState.getProxyCAState().setCaPrivateKey(caPrivateKeyData);
+  private CompletableFuture<Void> loadProxyCAManagerState(RMState rmState) {
+      String caCertPath = getNodePath(proxyCARoot, PROXY_CA_CERT_NODE);
+      String caPrivateKeyPath = getNodePath(proxyCARoot,
+          PROXY_CA_PRIVATE_KEY_NODE);
+  
+      return existsAsync(caCertPath).thenCombine(
+          existsAsync(caPrivateKeyPath),
+          (existsCaCert, existsCaPriv) -> {
+            if (!existsCaCert || !existsCaPriv) {
+              LOG.warn("Couldn't find Proxy CA data");
+              return false;
+            }
+            return true;
+          }
+      ).thenCompose(exists -> {
+        if (exists) {
+          CompletableFuture<Void> cacert = getDataAsync(caCertPath).thenAccept(new FallibleAction<byte[]>() {
+            @Override
+            protected void with(byte[] caCertData) throws Exception {
+              synchronized (rmState) {
+                rmState.getProxyCAState().setCaCert(caCertData);
+              }
+            }
+          }).toCompletableFuture();
+          CompletableFuture<Void> capriv = getDataAsync(caPrivateKeyPath).thenAccept(new FallibleAction<byte[]>() {
+            @Override
+            protected void with(byte[] caPrivateKeyData) throws Exception {
+              synchronized (rmState) {
+                rmState.getProxyCAState().setCaPrivateKey(caPrivateKeyData);
+              }
+            }
+          }).toCompletableFuture();
+          
+          return CompletableFuture.allOf(cacert, capriv);
+        } else {
+          LOG.warn("Couldn't recover Proxy CA data");
+          return CompletableFuture.completedFuture(null);
+        }
+      });
   }
 
   @Override
@@ -1399,6 +1571,11 @@ public class ZKRMStateStore extends RMStateStore {
   byte[] getData(final String path) throws Exception {
     return zkManager.getData(path);
   }
+  
+  @VisibleForTesting
+  CompletionStage<byte[]> getDataAsync(final String path) {
+    return zkManager.getDataAsync(path);
+  }
 
   @VisibleForTesting
   List<ACL> getACL(final String path) throws Exception {
@@ -1409,10 +1586,20 @@ public class ZKRMStateStore extends RMStateStore {
   List<String> getChildren(final String path) throws Exception {
     return zkManager.getChildren(path);
   }
+  
+  @VisibleForTesting
+  CompletionStage<List<String>> getChildrenAsync(final String path) {
+    return zkManager.getChildrenAsync(path);
+  }
 
   @VisibleForTesting
   boolean exists(final String path) throws Exception {
     return zkManager.exists(path);
+  }
+  
+  @VisibleForTesting
+  CompletableFuture<Boolean> existsAsync(final String path) {
+    return zkManager.existsAsync(path).toCompletableFuture();
   }
 
   @VisibleForTesting

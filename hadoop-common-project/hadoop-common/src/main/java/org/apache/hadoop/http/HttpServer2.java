@@ -22,6 +22,7 @@ import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.io.PrintStream;
+import java.lang.management.ManagementFactory;
 import java.net.BindException;
 import java.net.InetSocketAddress;
 import java.net.MalformedURLException;
@@ -79,6 +80,7 @@ import org.apache.hadoop.util.ReflectionUtils;
 import org.apache.hadoop.util.Shell;
 import org.apache.hadoop.util.StringUtils;
 import org.eclipse.jetty.http.HttpVersion;
+import org.eclipse.jetty.jmx.MBeanContainer;
 import org.eclipse.jetty.server.ConnectionFactory;
 import org.eclipse.jetty.server.Connector;
 import org.eclipse.jetty.server.Handler;
@@ -617,6 +619,10 @@ public final class HttpServer2 implements FilterContainer {
     this.webAppContext = createWebAppContext(b, adminsAcl, appDir);
     this.xFrameOptionIsEnabled = b.xFrameEnabled;
     this.xFrameOption = b.xFrameOption;
+    
+    //Register Jetty JMX beans
+    MBeanContainer mbeanContainer = new MBeanContainer(ManagementFactory.getPlatformMBeanServer());
+    webServer.addBean(mbeanContainer);
 
     try {
       this.secretProvider =

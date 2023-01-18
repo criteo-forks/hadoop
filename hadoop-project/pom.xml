@@ -749,6 +749,11 @@
       </dependency>
       <dependency>
         <groupId>org.eclipse.jetty</groupId>
+        <artifactId>jetty-jmx</artifactId>
+        <version>${jetty.version}</version>
+      </dependency>
+      <dependency>
+        <groupId>org.eclipse.jetty</groupId>
         <artifactId>jetty-util</artifactId>
         <version>${jetty.version}</version>
       </dependency>
@@ -1512,6 +1517,25 @@
          </exclusion>
        </exclusions>
      </dependency>
+      <dependency>
+        <groupId>org.apache.curator</groupId>
+        <artifactId>curator-x-async</artifactId>
+        <version>${curator.version}</version>
+        <exclusions>
+          <exclusion>
+            <groupId>org.apache.zookeeper</groupId>
+            <artifactId>zookeeper</artifactId>
+          </exclusion>
+          <exclusion>
+            <groupId>com.google.guava</groupId>
+            <artifactId>guava</artifactId>
+          </exclusion>
+          <exclusion>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+          </exclusion>
+        </exclusions>
+      </dependency>
      <dependency>
        <groupId>org.apache.curator</groupId>
        <artifactId>curator-test</artifactId>

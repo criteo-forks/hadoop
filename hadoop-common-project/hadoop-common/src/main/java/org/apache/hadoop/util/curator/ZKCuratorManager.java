@@ -23,11 +23,14 @@ import java.util.ArrayList;
 import java.util.LinkedList;
 import java.util.List;
 
+import java.util.Objects;
+import java.util.concurrent.CompletionStage;
 import org.apache.curator.framework.AuthInfo;
 import org.apache.curator.framework.CuratorFramework;
 import org.apache.curator.framework.CuratorFrameworkFactory;
 import org.apache.curator.framework.api.transaction.CuratorOp;
 import org.apache.curator.retry.RetryNTimes;
+import org.apache.curator.x.async.AsyncCuratorFramework;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.CommonConfigurationKeys;
@@ -55,6 +58,7 @@ public final class ZKCuratorManager {
 
   /** Curator for ZooKeeper. */
   private CuratorFramework curator;
+  private AsyncCuratorFramework asyncCurator;
 
   public ZKCuratorManager(Configuration config) throws IOException {
     this.conf = config;
@@ -155,6 +159,7 @@ public final class ZKCuratorManager {
     client.start();
 
     this.curator = client;
+    this.asyncCurator = AsyncCuratorFramework.wrap(client);
   }
 
   /**
@@ -175,6 +180,10 @@ public final class ZKCuratorManager {
    */
   public byte[] getData(final String path) throws Exception {
     return curator.getData().forPath(path);
+  }
+  
+  public CompletionStage<byte[]> getDataAsync(final String path) {
+    return asyncCurator.getData().forPath(path);
   }
 
   /**
@@ -249,6 +258,10 @@ public final class ZKCuratorManager {
   public List<String> getChildren(final String path) throws Exception {
     return curator.getChildren().forPath(path);
   }
+  
+  public CompletionStage<List<String>> getChildrenAsync(final String path) {
+    return asyncCurator.getChildren().forPath(path);
+  }
 
   /**
    * Check if a ZNode exists.
@@ -258,6 +271,10 @@ public final class ZKCuratorManager {
    */
   public boolean exists(final String path) throws Exception {
     return curator.checkExists().forPath(path) != null;
+  }
+  
+  public CompletionStage<Boolean> existsAsync(final String path) {
+    return asyncCurator.checkExists().forPath(path).thenApply(Objects::nonNull);
   }
 
   /**

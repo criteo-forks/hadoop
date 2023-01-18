@@ -110,6 +110,11 @@
     </dependency>
     <dependency>
       <groupId>org.eclipse.jetty</groupId>
+      <artifactId>jetty-jmx</artifactId>
+      <scope>compile</scope>
+    </dependency>
+    <dependency>
+      <groupId>org.eclipse.jetty</groupId>
       <artifactId>jetty-util</artifactId>
       <scope>compile</scope>
     </dependency>
@@ -266,6 +271,10 @@
     <dependency>
       <groupId>org.apache.curator</groupId>
       <artifactId>curator-client</artifactId>
+    </dependency>
+    <dependency>
+      <groupId>org.apache.curator</groupId>
+      <artifactId>curator-x-async</artifactId>
     </dependency>
     <dependency>
       <groupId>org.apache.curator</groupId>
