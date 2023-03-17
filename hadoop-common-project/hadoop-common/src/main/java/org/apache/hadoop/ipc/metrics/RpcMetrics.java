@@ -130,6 +130,8 @@ public class RpcMetrics {
   MutableCounterLong rpcClientBackoff;
   @Metric("Number of Slow RPC calls")
   MutableCounterLong rpcSlowCalls;
+  @Metric("Number of requeue calls")
+  MutableCounterLong rpcRequeueCalls;
 
   @Metric("Number of open connections") public int numOpenConnections() {
     return server.getNumOpenConnections();
@@ -303,6 +305,13 @@ public class RpcMetrics {
   }
 
   /**
+   * Increments the Requeue Calls counter.
+   */
+  public void incrRequeueCalls() {
+    rpcRequeueCalls.incr();
+  }
+
+  /**
    * Return Standard Deviation of the Processing Time.
    * @return  double
    */
@@ -317,7 +326,16 @@ public class RpcMetrics {
   public long getRpcSlowCalls() {
     return rpcSlowCalls.value();
   }
-
+  
+  /**
+   * Returns the number of requeue calls.
+   * @return long
+   */
+  @VisibleForTesting
+  public long getRpcRequeueCalls() {
+    return rpcRequeueCalls.value();
+  }
+  
   public MutableRate getDeferredRpcProcessingTime() {
     return deferredRpcProcessingTime;
   }
