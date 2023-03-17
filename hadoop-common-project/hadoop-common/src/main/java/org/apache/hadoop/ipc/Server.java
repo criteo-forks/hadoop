@@ -2867,10 +2867,10 @@ public abstract class Server {
 
   private void internalQueueCall(Call call)
       throws IOException, InterruptedException {
-    internalQueueCall(call, true);
+    internalQueueCall(call, true, call.timestampNanos);
   }
 
-  private void internalQueueCall(Call call, boolean blocking)
+  private void internalQueueCall(Call call, boolean blocking, long startTimeNanos)
       throws IOException, InterruptedException {
     try {
       // queue the call, may be blocked if blocking is true.
@@ -2879,8 +2879,11 @@ public abstract class Server {
       } else {
         callQueue.add(call);
       }
-      long deltaNanos = Time.monotonicNowNanos() - call.timestampNanos;
-      call.getProcessingDetails().set(Timing.ENQUEUE, deltaNanos,
+      long deltaNanos = Time.monotonicNowNanos() - startTimeNanos;
+      // in case of requeue, it is possible that enqueue time is already present
+      // enqueue time should be cumulative
+      long alreadyAccountedEnqueueTimeNanos = call.getProcessingDetails().get(Timing.ENQUEUE, TimeUnit.NANOSECONDS);
+      call.getProcessingDetails().set(Timing.ENQUEUE, alreadyAccountedEnqueueTimeNanos + deltaNanos,
           TimeUnit.NANOSECONDS);
     } catch (CallQueueOverflowException cqe) {
       // If rpc scheduler indicates back off based on performance degradation
@@ -2934,7 +2937,7 @@ public abstract class Server {
              * commutative.
              */
             // Re-queue the call and continue
-            requeueCall(call);
+            requeueCall(call, startTimeNanos);
             call = null;
             continue;
           }
@@ -2986,10 +2989,10 @@ public abstract class Server {
       LOG.debug(Thread.currentThread().getName() + ": exiting");
     }
 
-    private void requeueCall(Call call)
+    private void requeueCall(Call call, long startTimeNanos)
         throws IOException, InterruptedException {
       try {
-        internalQueueCall(call, false);
+        internalQueueCall(call, false, startTimeNanos);
       } catch (RpcServerException rse) {
         call.doResponse(rse.getCause(), rse.getRpcStatusProto());
       }
