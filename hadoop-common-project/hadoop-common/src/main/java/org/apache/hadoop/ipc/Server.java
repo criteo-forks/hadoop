@@ -569,7 +569,9 @@ public abstract class Server {
     details.set(Timing.HANDLER, deltaNanos);
 
     long queueTime = details.get(Timing.QUEUE, RpcMetrics.TIMEUNIT);
+    long enqueueTime = details.get(Timing.ENQUEUE, RpcMetrics.TIMEUNIT);
     rpcMetrics.addRpcQueueTime(queueTime);
+    rpcMetrics.addRpcEnqueueTime(enqueueTime);
 
     if (call.isResponseDeferred() || connDropped) {
       // call was skipped; don't include it in processing metrics
