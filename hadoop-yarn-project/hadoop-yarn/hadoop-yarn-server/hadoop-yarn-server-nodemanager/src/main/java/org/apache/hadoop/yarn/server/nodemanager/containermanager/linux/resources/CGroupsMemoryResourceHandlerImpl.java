@@ -141,6 +141,17 @@ public class CGroupsMemoryResourceHandlerImpl implements MemoryResourceHandler {
           LOG.warn("Could not update cgroup for container", re);
           throw re;
         }
+      } else {
+        try {
+          //Use soft limit as a hint of what the container actually requested
+          cGroupsHandler.updateCGroupParam(MEMORY, cgroupId,
+              CGroupsHandler.CGROUP_PARAM_MEMORY_SOFT_LIMIT_BYTES,
+              String.valueOf(containerHardLimit) + "M");
+        } catch (ResourceHandlerException re) {
+          cGroupsHandler.deleteCGroup(MEMORY, cgroupId);
+          LOG.warn("Could not update cgroup for container", re);
+          throw re;
+        }
       }
     }
     return null;
