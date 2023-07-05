@@ -17,7 +17,7 @@
 # Dockerfile for installing the necessary dependencies for building Hadoop.
 # See BUILDING.txt.
 
-FROM filer-docker-registry.crto.in/criteo-centos-base:0.1.0-760-ga673e65-28642ec06
+FROM filer-docker-registry.crto.in/criteo-centos-base:0.1.0-3828-g9cc9ed15
 
 WORKDIR /root
 
@@ -78,7 +78,7 @@ RUN alternatives --install /usr/local/bin/cmake cmake /usr/bin/cmake3 20 \
 
 # Install maven 3 from source
 RUN rm -rf /usr/share/maven \
-    && wget --no-check-certificate https://downloads.apache.org/maven/maven-3/3.5.4/binaries/apache-maven-3.5.4-bin.tar.gz \
+    && wget --no-check-certificate https://repo.maven.apache.org/maven2/org/apache/maven/apache-maven/3.5.4/apache-maven-3.5.4-bin.tar.gz \
     && tar xf apache-maven-3.5.4-bin.tar.gz -C /usr/share \
     && ln -s /usr/share/apache-maven-3.5.4 /usr/share/maven
 
