@@ -3234,6 +3234,15 @@
     <value>1800000</value>
   </property>
 
+  <property>
+    <description>
+      Flag to indicate whether the AM can be allocated to non-exclusive nodes or not.
+      Default is false.
+    </description>
+    <name>yarn.resourcemanager.node-labels.am.allow-non-exclusive-allocation</name>
+    <value>false</value>
+  </property>
+
   <!-- Distributed Node Attributes Configuration -->
   <property>
     <description>
