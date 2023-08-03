@@ -138,7 +138,7 @@ public class BlockPlacementPolicyWithPlacementGroup extends BlockPlacementPolicy
         chooseRemoteRack(1, dn0, excludedNodes, blocksize, maxNodesPerRack,
             results, avoidStaleNodes, storageTypes);
       } else if (newBlock) {
-        String placementGroup0 = NetworkTopology.getLastHalf(dn0.getNetworkLocation());
+        String placementGroup0 = NetworkTopology.getFirstHalf(dn0.getNetworkLocation());
         DatanodeDescriptor localDn = getLeastUsedScope().equals(placementGroup0) ? dn0 : dn1;
         chooseLocalRack(localDn, excludedNodes, blocksize, maxNodesPerRack,
             results, avoidStaleNodes, storageTypes);
