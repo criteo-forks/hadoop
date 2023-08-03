@@ -109,8 +109,6 @@ public class TestReplicationPolicyWithPlacementGroup extends BaseReplicationPoli
     dataNodesInMoreTargetsCase = DFSTestUtil.toDatanodeDescriptor(storagesInMoreTargetsCase);
   }
 
-  ;
-
   private final static DatanodeDescriptor NODE =
       DFSTestUtil.getDatanodeDescriptor("9.9.9.9", "/d2/r4/n7");
 
@@ -145,6 +143,7 @@ public class TestReplicationPolicyWithPlacementGroup extends BaseReplicationPoli
 
   /**
    * Test block placement verification.
+   *
    * @throws Exception
    */
   @Test
@@ -289,8 +288,9 @@ public class TestReplicationPolicyWithPlacementGroup extends BaseReplicationPoli
    * So the 1st replica should be placed on dataNodes[1], the 2nd replica should be placed on
    * different rack and third should be placed on different node (and node group)
    * of rack chosen for 2nd node.
-   * The only excpetion is when the <i>numOfReplicas</i> is 2, 
+   * The only excpetion is when the <i>numOfReplicas</i> is 2,
    * the 1st is on dataNodes[0] and the 2nd is on a different rack.
+   *
    * @throws Exception
    */
   @Test
@@ -330,7 +330,7 @@ public class TestReplicationPolicyWithPlacementGroup extends BaseReplicationPoli
     assertTrue(isOnSameRack(targets[1], targets[2]) ||
         isOnSameRack(targets[2], targets[3]));
     assertFalse(isOnSameRack(targets[0], targets[2]));
-    // Make sure no more than one replicas are on the same nodegroup 
+    // Make sure no more than one replicas are on the same nodegroup
     verifyNoTwoTargetsOnSameNodeGroup(targets);
 
     updateHeartbeatWithUsage(dataNodes[0],
@@ -352,6 +352,7 @@ public class TestReplicationPolicyWithPlacementGroup extends BaseReplicationPoli
    * placed on dataNodes[0], the 2nd replica should be placed on a different
    * rack, the 3rd should be on same rack as the 2nd replica but in different
    * node group, and the rest should be placed on a third rack.
+   *
    * @throws Exception
    */
   @Test
@@ -394,10 +395,11 @@ public class TestReplicationPolicyWithPlacementGroup extends BaseReplicationPoli
 
   /**
    * In this testcase, client is dataNodes[0], but dataNodes[0] is not qualified
-   * to be chosen. So the 1st replica should be placed on dataNodes[1], 
+   * to be chosen. So the 1st replica should be placed on dataNodes[1],
    * the 2nd replica should be placed on a different rack,
    * the 3rd replica should be placed on the same rack as the 2nd replica but in different nodegroup,
    * and the rest should be placed on the third rack.
+   *
    * @throws Exception
    */
   @Test
@@ -443,10 +445,11 @@ public class TestReplicationPolicyWithPlacementGroup extends BaseReplicationPoli
   /**
    * In this testcase, client is dataNodes[0], but none of the nodes on rack 1
    * is qualified to be chosen. So the 1st replica should be placed on either
-   * rack 2 or rack 3. 
+   * rack 2 or rack 3.
    * the 2nd replica should be placed on a different rack,
-   * the 3rd replica should be placed on the same rack as the 1st replica, but 
+   * the 3rd replica should be placed on the same rack as the 1st replica, but
    * in different node group.
+   *
    * @throws Exception
    */
   @Test
@@ -483,10 +486,11 @@ public class TestReplicationPolicyWithPlacementGroup extends BaseReplicationPoli
   }
 
   /**
-   * In this testcase, client is is a node outside of file system.
-   * So the 1st replica can be placed on any node. 
+   * In this testcase, client is a node outside of file system.
+   * So the 1st replica can be placed on any node.
    * the 2nd replica should be placed on a different rack,
    * the 3rd replica should be placed on the same rack as the 2nd replica,
+   *
    * @throws Exception
    */
   @Test
@@ -511,9 +515,167 @@ public class TestReplicationPolicyWithPlacementGroup extends BaseReplicationPoli
   }
 
   /**
+   * In this testcase, client is on r1, am6
+   * am6 has a usage of 50%
+   * fr4 has a usage of 0%
+   * should choose 2 replications on less used PG, 1 on the other
+   * So the 1st replica can be placed on any node.
+   * the 2nd replica should be placed on a different rack,
+   * the 3rd replica should be placed on the same rack as the 2nd replica,
+   *
+   * @throws Exception
+   */
+  @Test
+  public void testChooseTarget6() {
+    for (DatanodeDescriptor dataNode : dataNodes) {
+      cluster.remove(dataNode);
+    }
+
+    DatanodeStorageInfo[] storagesInTwoPlacementGroupsTargetsCase;
+    DatanodeDescriptor[] dataNodesInTwoPlacementGroupsTargetsCase;
+
+    String[] racksInTwoPlacementGroups = {
+        "/exp/am6/r11",
+        "/exp/am6/r12",
+        "/exp/am6/r13",
+        "/exp/fr4/r21",
+        "/exp/fr4/r22",
+        "/exp/fr4/r23"
+    };
+    storagesInTwoPlacementGroupsTargetsCase = DFSTestUtil.createDatanodeStorageInfos(racksInTwoPlacementGroups);
+    dataNodesInTwoPlacementGroupsTargetsCase =
+        DFSTestUtil.toDatanodeDescriptor(storagesInTwoPlacementGroupsTargetsCase);
+
+
+    DatanodeStorageInfo[] targets;
+
+    for (DatanodeDescriptor datanode : dataNodesInTwoPlacementGroupsTargetsCase) {
+      cluster.add(datanode);
+    }
+    Arrays.stream(storagesInTwoPlacementGroupsTargetsCase)
+        .filter(datanodeStorageInfo -> isInScope(datanodeStorageInfo, "/exp/am6"))
+        .forEach(datanodeStorageInfo -> updateHeartbeatWithUsage(datanodeStorageInfo.getDatanodeDescriptor(),
+            2 * HdfsServerConstants.MIN_BLOCKS_FOR_WRITE * BLOCK_SIZE, 0L,
+            HdfsServerConstants.MIN_BLOCKS_FOR_WRITE * BLOCK_SIZE, 0L, 0L, 0L, 0, 0));
+
+    Arrays.stream(storagesInTwoPlacementGroupsTargetsCase)
+        .filter(datanodeStorageInfo -> isInScope(datanodeStorageInfo, "/exp/fr4"))
+        .forEach(datanodeStorageInfo -> updateHeartbeatWithUsage(datanodeStorageInfo.getDatanodeDescriptor(),
+            2 * HdfsServerConstants.MIN_BLOCKS_FOR_WRITE * BLOCK_SIZE, 0L,
+            2 * HdfsServerConstants.MIN_BLOCKS_FOR_WRITE * BLOCK_SIZE, 0L, 0L, 0L, 0, 0));
+
+    //if writer is on the PG with higher usage
+    DatanodeDescriptor writer = dataNodesInTwoPlacementGroupsTargetsCase[0];
+    targets = chooseTarget(0, writer);
+    assertEquals(targets.length, 0);
+
+    targets = chooseTarget(1, writer);
+    assertEquals(targets.length, 1);
+    assertTrue(isInScope(targets[0], "/exp/am6"));
+
+    targets = chooseTarget(2, writer);
+    assertEquals(targets.length, 2);
+    assertTrue(isInScope(targets[0], "/exp/am6"));
+    assertTrue(isInScope(targets[1], "/exp/fr4"));
+
+    targets = chooseTarget(3, writer);
+    assertEquals(3, targets.length);
+    assertTrue(isInScope(targets[0], "/exp/am6"));
+    assertTrue(isInScope(targets[1], "/exp/fr4"));
+    assertTrue(isInScope(targets[2], "/exp/fr4"));
+
+    //if writer is on the PG with less usage
+    writer = dataNodesInTwoPlacementGroupsTargetsCase[3];
+    targets = chooseTarget(0, writer);
+    assertEquals(targets.length, 0);
+
+    targets = chooseTarget(1, writer);
+    assertEquals(targets.length, 1);
+    assertTrue(isInScope(targets[0], "/exp/fr4"));
+
+    targets = chooseTarget(2, writer);
+    assertEquals(targets.length, 2);
+    assertTrue(isInScope(targets[0], "/exp/fr4"));
+    assertTrue(isInScope(targets[1], "/exp/am6"));
+
+    targets = chooseTarget(3, writer);
+    assertEquals(3, targets.length);
+    assertTrue(isInScope(targets[0], "/exp/fr4"));
+    assertTrue(isInScope(targets[1], "/exp/fr4"));
+    assertTrue(isInScope(targets[2], "/exp/am6"));
+  }
+
+  private boolean isInScope(DatanodeStorageInfo node, String scope) {
+    return NetworkTopology.getFirstHalf(node.getDatanodeDescriptor().getNetworkLocation()).equals(scope);
+  }
+
+  /**
+   * when having more than 3 replication, should choose evenly for each placement group
+   *
+   * @throws Exception
+   */
+  @Test
+  public void testChooseTarget7() {
+    for (DatanodeDescriptor dataNode : dataNodes) {
+      cluster.remove(dataNode);
+    }
+
+    DatanodeStorageInfo[] storagesInTwoPlacementGroupsTargetsCase;
+    DatanodeDescriptor[] dataNodesInTwoPlacementGroupsTargetsCase;
+
+    String[] racksInTwoPlacementGroups = {
+        "/exp/am6/r11",
+        "/exp/am6/r12",
+        "/exp/am6/r13",
+        "/exp/am6/r13",
+        "/exp/am6/r15",
+        "/exp/am6/r16",
+        "/exp/fr4/r11",
+        "/exp/fr4/r12",
+        "/exp/fr4/r13",
+        "/exp/fr4/r14",
+        "/exp/fr4/r15",
+        "/exp/fr4/r16"
+    };
+    storagesInTwoPlacementGroupsTargetsCase = DFSTestUtil.createDatanodeStorageInfos(racksInTwoPlacementGroups);
+    dataNodesInTwoPlacementGroupsTargetsCase =
+        DFSTestUtil.toDatanodeDescriptor(storagesInTwoPlacementGroupsTargetsCase);
+
+
+    DatanodeStorageInfo[] targets;
+
+    for (DatanodeDescriptor datanode : dataNodesInTwoPlacementGroupsTargetsCase) {
+      cluster.add(datanode);
+    }
+    Arrays.stream(storagesInTwoPlacementGroupsTargetsCase)
+        .filter(datanodeStorageInfo -> isInScope(datanodeStorageInfo, "/exp/am6"))
+        .forEach(datanodeStorageInfo -> updateHeartbeatWithUsage(datanodeStorageInfo.getDatanodeDescriptor(),
+            2 * HdfsServerConstants.MIN_BLOCKS_FOR_WRITE * BLOCK_SIZE, 0L,
+            HdfsServerConstants.MIN_BLOCKS_FOR_WRITE * BLOCK_SIZE, 0L, 0L, 0L, 0, 0));
+
+    Arrays.stream(storagesInTwoPlacementGroupsTargetsCase)
+        .filter(datanodeStorageInfo -> isInScope(datanodeStorageInfo, "/exp/fr4"))
+        .forEach(datanodeStorageInfo -> updateHeartbeatWithUsage(datanodeStorageInfo.getDatanodeDescriptor(),
+            2 * HdfsServerConstants.MIN_BLOCKS_FOR_WRITE * BLOCK_SIZE, 0L,
+            2 * HdfsServerConstants.MIN_BLOCKS_FOR_WRITE * BLOCK_SIZE, 0L, 0L, 0L, 0, 0));
+
+    DatanodeDescriptor writer = dataNodesInTwoPlacementGroupsTargetsCase[0];
+
+    targets = chooseTarget(10, writer);
+    assertEquals(10, targets.length);
+    assertEquals(5,
+        Arrays.stream(targets).filter(dn -> isInScope(dn, "/exp/am6"))
+            .count());
+    assertEquals(5,
+        Arrays.stream(targets).filter(dn -> isInScope(dn, "/exp/fr4"))
+            .count());
+  }
+
+  /**
    * In this testcase, client is dataNodes[7], but it is not qualified
    * to be chosen. And there is no other node available on client Node group.
    * So the 1st replica should be placed on client local rack dataNodes[6]
+   *
    * @throws Exception
    */
   @Test
@@ -531,9 +693,10 @@ public class TestReplicationPolicyWithPlacementGroup extends BaseReplicationPoli
 
   /**
    * This testcase tests re-replication, when dataNodes[0] is already chosen.
-   * So the 1st replica can be placed on random rack. 
-   * the 2nd replica should be placed on different node and nodegroup by same rack as 
+   * So the 1st replica can be placed on random rack.
+   * the 2nd replica should be placed on different node and nodegroup by same rack as
    * the 1st replica. The 3rd replica can be placed randomly.
+   *
    * @throws Exception
    */
   @Test
@@ -563,10 +726,11 @@ public class TestReplicationPolicyWithPlacementGroup extends BaseReplicationPoli
   }
 
   /**
-   * This testcase tests re-replication, 
+   * This testcase tests re-replication,
    * when dataNodes[0] and dataNodes[1] are already chosen.
-   * So the 1st replica should be placed on a different rack of rack 1. 
+   * So the 1st replica should be placed on a different rack of rack 1.
    * the rest replicas can be placed randomly,
+   *
    * @throws Exception
    */
   @Test
@@ -591,10 +755,11 @@ public class TestReplicationPolicyWithPlacementGroup extends BaseReplicationPoli
   }
 
   /**
-   * This testcase tests re-replication, 
+   * This testcase tests re-replication,
    * when dataNodes[0] and dataNodes[3] are already chosen.
-   * So the 1st replica should be placed on the rack that the writer resides. 
+   * So the 1st replica should be placed on the rack that the writer resides.
    * the rest replicas can be placed randomly,
+   *
    * @throws Exception
    */
   @Test
@@ -630,7 +795,7 @@ public class TestReplicationPolicyWithPlacementGroup extends BaseReplicationPoli
   }
 
   /**
-   * Test for the chooseReplicaToDelete are processed based on 
+   * Test for the chooseReplicaToDelete are processed based on
    * block locality and free space
    */
   @Test
@@ -701,8 +866,8 @@ public class TestReplicationPolicyWithPlacementGroup extends BaseReplicationPoli
    * Test replica placement policy in case of boundary topology.
    * Rack 2 has only 1 node group & can't be placed with two replicas
    * The 1st replica will be placed on writer.
-   * The 2nd replica should be placed on a different rack 
-   * The 3rd replica should be placed on the same rack with writer, but on a 
+   * The 2nd replica should be placed on a different rack
+   * The 3rd replica should be placed on the same rack with writer, but on a
    * different node group.
    */
   @Test
@@ -761,10 +926,10 @@ public class TestReplicationPolicyWithPlacementGroup extends BaseReplicationPoli
   }
 
   /**
-   * Test replica placement policy in case of targets more than number of 
+   * Test replica placement policy in case of targets more than number of
    * NodeGroups.
-   * The 12-nodes cluster only has 6 NodeGroups, but in some cases, like: 
-   * placing submitted job file, there is requirement to choose more (10) 
+   * The 12-nodes cluster only has 6 NodeGroups, but in some cases, like:
+   * placing submitted job file, there is requirement to choose more (10)
    * targets for placing replica. We should test it can return 6 targets.
    */
   @Test
@@ -864,6 +1029,7 @@ public class TestReplicationPolicyWithPlacementGroup extends BaseReplicationPoli
   /**
    * In this testcase, favored node is dataNodes[6].
    * 1st replica should be placed on favored node.
+   *
    * @throws Exception
    */
   @Test
@@ -884,6 +1050,7 @@ public class TestReplicationPolicyWithPlacementGroup extends BaseReplicationPoli
    * dataNodes[0](Good Node), dataNodes[3](Bad node).
    * 1st replica should be placed on good favored node dataNodes[0].
    * 2nd replica should be on bad favored node's nodegroup dataNodes[4].
+   *
    * @throws Exception
    */
   @Test
@@ -912,7 +1079,7 @@ public class TestReplicationPolicyWithPlacementGroup extends BaseReplicationPoli
   /**
    * In this testcase, passed 3 favored nodes
    * dataNodes[0],dataNodes[1],dataNodes[2]
-   *
+   * <p>
    * Favored nodes on different nodegroup should be selected. Remaining replica
    * should go through BlockPlacementPolicy.
    *
