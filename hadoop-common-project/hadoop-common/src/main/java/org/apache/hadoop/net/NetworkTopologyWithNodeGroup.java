@@ -195,7 +195,7 @@ public class NetworkTopologyWithNodeGroup extends NetworkTopology {
         nodeGroup = new InnerNodeWithNodeGroup(node.getNetworkLocation());
       }
       rack = getNode(nodeGroup.getNetworkLocation());
-      
+
       // rack should be an innerNode and with parent.
       // note: rack's null parent case is: node's topology only has one layer, 
       //       so rack is recognized as "/" and no parent. 
