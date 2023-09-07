@@ -199,7 +199,13 @@ public class CapacityScheduler extends
   private int maxAssignPerHeartbeat;
 
   private CSConfigurationProvider csConfProvider;
-
+  
+  private static final String ALLOW_NON_EXCLUSIVE_SCHEDULING_KEY =
+      CapacitySchedulerConfiguration.PREFIX
+          + "allow-non-exclusive-scheduling";
+      
+  private boolean allowNonExclusiveScheduling;
+  
   @Override
   public void setConf(Configuration conf) {
       yarnConf = conf;
@@ -348,6 +354,11 @@ public class CapacityScheduler extends
 
       this.assignMultipleEnabled = this.conf.getAssignMultipleEnabled();
       this.maxAssignPerHeartbeat = this.conf.getMaxAssignPerHeartbeat();
+  
+      this.allowNonExclusiveScheduling = this.conf.getBoolean(
+          ALLOW_NON_EXCLUSIVE_SCHEDULING_KEY,
+          true
+      );
 
       // number of threads for async scheduling
       int maxAsyncSchedulingThreads = this.conf.getInt(
@@ -1700,18 +1711,22 @@ public class CapacityScheduler extends
     }
 
     // Try to use NON_EXCLUSIVE
-    assignment = getRootQueue().assignContainers(getClusterResource(),
-        candidates,
-        // TODO, now we only consider limits for parent for non-labeled
-        // resources, should consider labeled resources as well.
-        new ResourceLimits(labelManager
-            .getResourceByLabel(RMNodeLabelsManager.NO_LABEL,
-                getClusterResource())),
-        SchedulingMode.IGNORE_PARTITION_EXCLUSIVITY);
-    assignment.setSchedulingMode(SchedulingMode.IGNORE_PARTITION_EXCLUSIVITY);
-    submitResourceCommitRequest(getClusterResource(), assignment);
-
-    return assignment;
+    if (!allowNonExclusiveScheduling) {
+      return null;
+    } else {
+      assignment = getRootQueue().assignContainers(getClusterResource(),
+          candidates,
+          // TODO, now we only consider limits for parent for non-labeled
+          // resources, should consider labeled resources as well.
+          new ResourceLimits(labelManager
+              .getResourceByLabel(RMNodeLabelsManager.NO_LABEL,
+                  getClusterResource())),
+          SchedulingMode.IGNORE_PARTITION_EXCLUSIVITY);
+      assignment.setSchedulingMode(SchedulingMode.IGNORE_PARTITION_EXCLUSIVITY);
+      submitResourceCommitRequest(getClusterResource(), assignment);
+  
+      return assignment;
+    }
   }
 
   /*
