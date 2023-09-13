@@ -45,6 +45,8 @@ import org.apache.hadoop.thirdparty.com.google.common.util.concurrent.SettableFu
 import org.apache.hadoop.yarn.metrics.GenericEventTypeMetrics;
 import org.apache.hadoop.yarn.server.resourcemanager.GenericEventTypeMetricsManager;
 import org.apache.hadoop.yarn.server.resourcemanager.NodesListManagerEventType;
+import org.apache.hadoop.yarn.util.Clock;
+import org.apache.hadoop.yarn.util.MonotonicClock;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.classification.InterfaceAudience.Private;
@@ -126,6 +128,10 @@ public abstract class RMStateStore extends AbstractService {
 
   public static final Logger LOG =
       LoggerFactory.getLogger(RMStateStore.class);
+
+  // metrics
+  private final Clock clock = new MonotonicClock();
+  private final GenericEventTypeMetrics metrics = GenericEventTypeMetricsManager.create(RMStateStore.class.getName(), RMStateStoreEventType.class);
 
   /**
    * The enum defines state of RMStateStore.
@@ -820,12 +826,6 @@ public abstract class RMStateStore extends AbstractService {
     epochRange = conf.getLong(YarnConfiguration.RM_EPOCH_RANGE,
         YarnConfiguration.DEFAULT_RM_EPOCH_RANGE);
     initInternal(conf);
-  
-    GenericEventTypeMetrics genericEventTypeMetrics =
-        GenericEventTypeMetricsManager.
-            create(dispatcher.getName(), RMStateStoreEventType.class);
-    dispatcher.addMetrics(genericEventTypeMetrics,
-        genericEventTypeMetrics.getEnumClass());
   }
 
   @Override
@@ -1253,7 +1253,9 @@ public abstract class RMStateStore extends AbstractService {
 
       final RMStateStoreState oldState = getRMStateStoreState();
 
+      long startTime = clock.getTime();
       this.stateMachine.doTransition(event.getType(), event);
+      this.metrics.increment(event.getType(), clock.getTime() - startTime);
 
       if (oldState != getRMStateStoreState()) {
         LOG.info("RMStateStore state change from " + oldState + " to "
