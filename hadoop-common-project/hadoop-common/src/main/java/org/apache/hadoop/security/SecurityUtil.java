@@ -31,7 +31,9 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.Map;
 import java.util.ServiceLoader;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 
 import javax.annotation.Nullable;
@@ -48,6 +50,7 @@ import org.apache.hadoop.net.NetUtils;
 import org.apache.hadoop.security.UserGroupInformation.AuthenticationMethod;
 import org.apache.hadoop.security.token.Token;
 import org.apache.hadoop.security.token.TokenInfo;
+import org.apache.hadoop.util.Shell;
 import org.apache.hadoop.util.StopWatch;
 import org.apache.hadoop.util.StringUtils;
 import org.apache.hadoop.util.ZKUtil;
@@ -68,7 +71,8 @@ import org.apache.hadoop.thirdparty.com.google.common.net.InetAddresses;
 public final class SecurityUtil {
   public static final Logger LOG = LoggerFactory.getLogger(SecurityUtil.class);
   public static final String HOSTNAME_PATTERN = "_HOST";
-  public static final String FAILED_TO_GET_UGI_MSG_HEADER = 
+  public static final String REALM_PATTERN = "_REALM";
+  public static final String FAILED_TO_GET_UGI_MSG_HEADER =
       "Failed to obtain user group information:";
 
   private SecurityUtil() {
@@ -83,6 +87,9 @@ public final class SecurityUtil {
 
   private static boolean logSlowLookups;
   private static int slowLookupThresholdMs;
+
+  private static String realmScript;
+  private static final Map<String, String> realmCache = new ConcurrentHashMap<>();
 
   static {
     setConfigurationInternal(new Configuration());
@@ -112,6 +119,8 @@ public final class SecurityUtil {
             .HADOOP_SECURITY_DNS_LOG_SLOW_LOOKUPS_THRESHOLD_MS_KEY,
         CommonConfigurationKeys
             .HADOOP_SECURITY_DNS_LOG_SLOW_LOOKUPS_THRESHOLD_MS_DEFAULT);
+
+    realmScript = conf.get(CommonConfigurationKeys.HADOOP_SECURITY_KERBEROS_REALM_SCRIPT_KEY);
   }
 
   /**
@@ -174,13 +183,7 @@ public final class SecurityUtil {
   @InterfaceStability.Evolving
   public static String getServerPrincipal(String principalConfig,
       String hostname) throws IOException {
-    String[] components = getComponents(principalConfig);
-    if (components == null || components.length != 3
-        || !components[1].equals(HOSTNAME_PATTERN)) {
-      return principalConfig;
-    } else {
-      return replacePattern(components, InetAddress.getByName(hostname).getCanonicalHostName());
-    }
+    return getServerPrincipal(principalConfig, InetAddress.getByName(hostname));
   }
   
   /**
@@ -202,32 +205,89 @@ public final class SecurityUtil {
   public static String getServerPrincipal(String principalConfig,
       InetAddress addr) throws IOException {
     String[] components = getComponents(principalConfig);
-    if (components == null || components.length != 3
-        || !components[1].equals(HOSTNAME_PATTERN)) {
+    if (components == null || components.length != 3) {
       return principalConfig;
-    } else {
-      if (addr == null) {
-        throw new IOException("Can't replace " + HOSTNAME_PATTERN
-            + " pattern since client address is null");
-      }
-      return replacePattern(components, addr.getCanonicalHostName());
     }
+
+    String service = components[0];
+    String host = components[1];
+    String realm = components[2];
+
+    boolean hostIsPattern = host.equals(HOSTNAME_PATTERN);
+    boolean realmIsPattern = realm.equals(REALM_PATTERN);
+
+    if (!hostIsPattern && !realmIsPattern) {
+      return principalConfig;
+    }
+
+    if (addr == null) {
+      throw new IOException("Can't replace principal pattern since client address is null");
+    }
+
+    String canonicalHostName = addr.getCanonicalHostName();
+
+    if (hostIsPattern) {
+      host = getHostName(canonicalHostName);
+    }
+
+    if (realmIsPattern) {
+      realm = getCachedHostRealm(canonicalHostName);
+    }
+
+    return service + "/" + host + "@" + realm;
   }
-  
+
   private static String[] getComponents(String principalConfig) {
     if (principalConfig == null)
       return null;
     return principalConfig.split("[/@]");
   }
-  
-  private static String replacePattern(String[] components, String hostname)
+
+  private static String getHostName(String hostname)
       throws IOException {
     String fqdn = hostname;
     if (fqdn == null || fqdn.isEmpty() || fqdn.equals("0.0.0.0")) {
       fqdn = getLocalHostName(null);
     }
-    return components[0] + "/" +
-        StringUtils.toLowerCase(fqdn) + "@" + components[2];
+    return StringUtils.toLowerCase(fqdn);
+  }
+
+  private static String getCachedHostRealm(String hostname) throws IOException {
+    if (!realmCache.containsKey(hostname)) {
+      synchronized (realmCache) {
+        if (!realmCache.containsKey(hostname)) {
+          String realm = getHostRealm(hostname);
+          realmCache.put(hostname, realm);
+          return realm;
+        }
+      }
+    }
+
+    return realmCache.get(hostname);
+  }
+
+  private static String getHostRealm(String hostname) throws IOException {
+    if (realmScript == null || realmScript.isEmpty()) {
+      RuntimeException e = new IllegalArgumentException(REALM_PATTERN +
+              " usage requires " + CommonConfigurationKeys.HADOOP_SECURITY_KERBEROS_REALM_SCRIPT_KEY + ". Check your" +
+              "configuration.");
+      LOG.error("server principal", e);
+      throw e;
+    }
+
+    try {
+      String realm = Shell.ShellCommandExecutor.execCommand(realmScript, hostname).trim();
+      if (realm.isEmpty()) {
+        throw new IOException("server principal: error running " + realmScript + " for " + REALM_PATTERN + " replacement, script output was empty");
+      }
+
+      LOG.info("server principal: " + realmScript + " assigned realm " + realm + " to " + hostname);
+      return realm;
+
+    } catch (IOException e) {
+      LOG.error("server principal: error running " + realmScript + " for " + REALM_PATTERN + " replacement", e);
+      throw e;
+    }
   }
 
   /**
