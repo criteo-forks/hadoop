@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hdfs.server.datanode;
 
+import org.apache.hadoop.hdfs.util.DataTransferThrottler;
 import org.apache.hadoop.thirdparty.com.google.common.annotations.VisibleForTesting;
 import org.apache.hadoop.thirdparty.com.google.common.base.Preconditions;
 import org.apache.hadoop.thirdparty.com.google.common.collect.Lists;
@@ -783,15 +784,41 @@ class BPOfferService {
       break;
     case DatanodeProtocol.DNA_BALANCERBANDWIDTHUPDATE:
       LOG.info("DatanodeCommand action: DNA_BALANCERBANDWIDTHUPDATE");
-      long bandwidth =
+      long encodedBandwidth =
                  ((BalancerBandwidthCommand) cmd).getBalancerBandwidthValue();
-      if (bandwidth > 0) {
+      if (encodedBandwidth > 0) {
         DataXceiverServer dxcs =
                      (DataXceiverServer) dn.dataXceiverServer.getRunnable();
-        LOG.info("Updating balance throttler bandwidth from "
-            + dxcs.balanceThrottler.getBandwidth() + " bytes/s "
-            + "to: " + bandwidth + " bytes/s.");
-        dxcs.balanceThrottler.setBandwidth(bandwidth);
+        
+        Throttler throttler = decodeThrottlerType(encodedBandwidth);
+        long bandwidth = decodeBandwidth(encodedBandwidth);
+        
+        switch (throttler) {
+          case BALANCE:
+            LOG.info("Updating balance throttler bandwidth from "
+                + dxcs.balanceThrottler.getBandwidth() + " bytes/s "
+                + "to: " + bandwidth + " bytes/s.");
+            dxcs.balanceThrottler.setBandwidth(bandwidth);
+            break;
+          case WRITE:
+            DataTransferThrottler writeThrottler = dxcs.getWriteThrottler();
+            if (writeThrottler != null) {
+              LOG.info("Updating write throttler bandwidth from "
+                  + writeThrottler.getBandwidth() + " bytes/s "
+                  + "to: " + bandwidth + " bytes/s.");
+              writeThrottler.setBandwidth(bandwidth);
+            }
+            break;
+          case TRANSFER:
+            DataTransferThrottler transferThrottler = dxcs.getTransferThrottler();
+            if (transferThrottler != null) {
+              LOG.info("Updating write throttler bandwidth from "
+                  + transferThrottler.getBandwidth() + " bytes/s "
+                  + "to: " + bandwidth + " bytes/s.");
+              transferThrottler.setBandwidth(bandwidth);
+            }
+            break;
+        }
       }
       break;
     case DatanodeProtocol.DNA_ERASURE_CODING_RECONSTRUCTION:
@@ -804,6 +831,41 @@ class BPOfferService {
       LOG.warn("Unknown DatanodeCommand action: " + cmd.getAction());
     }
     return true;
+  }
+  
+  /**
+   * The bandwidth value is a long that contains the type of throttler in the 2nd, 3rd and 4th highest bit
+   * (to avoid using the 1st highest bit and require inputting negative values)
+   *   * TRANSFER throttler is 2
+   *   * WRITE throttler is 3
+   *   * any other value acts as the default -> BALANCE throttler
+   *
+   * Example, for 500MB/sec and throttler write, the long value is 3458764514344828928
+   * which is 0011000000000000000000000000000000011111010000000000000000000000
+   *   * the throttler is represented by 0011 equals 3 -> WRITE throttler
+   *   * the bandwidth is 11111010000000000000000000000 -> 524288000 = 500 * 1024 * 1024
+   *
+   */
+  
+  static long THROTTLER_SELECTOR_MASK = 0x7000000000000000L; //0111000000000000000000000000000000000000000000000000000000000000
+  static long BANDWIDTH_SELECTOR_MASK = 0x0FFFFFFFFFFFFFFFL; //0000111111111111111111111111111111111111111111111111111111111111
+  
+  enum Throttler {
+    BALANCE, WRITE, TRANSFER
+  }
+  
+  private Throttler decodeThrottlerType(long encodedBandwidthValue) {
+    long throttlerBits = (encodedBandwidthValue & THROTTLER_SELECTOR_MASK) >>> 60;  // Extract the 2nd, 3rd, and 4th highest bits
+  
+    switch ((int) throttlerBits) {
+      case 2: return Throttler.TRANSFER;
+      case 3: return Throttler.WRITE;
+      default: return Throttler.BALANCE;
+    }
+  }
+  
+  private long decodeBandwidth(long encodedBandwidthValue) {
+    return encodedBandwidthValue & BANDWIDTH_SELECTOR_MASK; // Mask out the 4 highest bits to get bandwidth
   }
  
   /**
