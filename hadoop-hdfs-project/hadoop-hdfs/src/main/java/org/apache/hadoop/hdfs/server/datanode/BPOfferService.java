@@ -790,34 +790,9 @@ class BPOfferService {
         DataXceiverServer dxcs =
                      (DataXceiverServer) dn.dataXceiverServer.getRunnable();
         
-        Throttler throttler = decodeThrottlerType(encodedBandwidth);
-        long bandwidth = decodeBandwidth(encodedBandwidth);
-        
-        switch (throttler) {
-          case BALANCE:
-            LOG.info("Updating balance throttler bandwidth from "
-                + dxcs.balanceThrottler.getBandwidth() + " bytes/s "
-                + "to: " + bandwidth + " bytes/s.");
-            dxcs.balanceThrottler.setBandwidth(bandwidth);
-            break;
-          case WRITE:
-            DataTransferThrottler writeThrottler = dxcs.getWriteThrottler();
-            if (writeThrottler != null) {
-              LOG.info("Updating write throttler bandwidth from "
-                  + writeThrottler.getBandwidth() + " bytes/s "
-                  + "to: " + bandwidth + " bytes/s.");
-              writeThrottler.setBandwidth(bandwidth);
-            }
-            break;
-          case TRANSFER:
-            DataTransferThrottler transferThrottler = dxcs.getTransferThrottler();
-            if (transferThrottler != null) {
-              LOG.info("Updating write throttler bandwidth from "
-                  + transferThrottler.getBandwidth() + " bytes/s "
-                  + "to: " + bandwidth + " bytes/s.");
-              transferThrottler.setBandwidth(bandwidth);
-            }
-            break;
+        List<Throttler> throttlers = Throttler.decodeThrottler(encodedBandwidth);
+        for (Throttler throttler : throttlers) {
+          throttler.setBandwidth(dxcs, encodedBandwidth);
         }
       }
       break;
@@ -834,40 +809,81 @@ class BPOfferService {
   }
   
   /**
-   * The bandwidth value is a long that contains the type of throttler in the 2nd, 3rd and 4th highest bit
-   * (to avoid using the 1st highest bit and require inputting negative values)
-   *   * TRANSFER throttler is 2
-   *   * WRITE throttler is 3
-   *   * any other value acts as the default -> BALANCE throttler
    *
-   * Example, for 500MB/sec and throttler write, the long value is 3458764514344828928
-   * which is 0011000000000000000000000000000000011111010000000000000000000000
-   *   * the throttler is represented by 0011 equals 3 -> WRITE throttler
-   *   * the bandwidth is 11111010000000000000000000000 -> 524288000 = 500 * 1024 * 1024
+   * Utility enum for DatanodeProtocol.DNA_BALANCERBANDWIDTHUPDATE
    *
+   * The bandwidth value is a long that contains the type of throttlers in the 37th, 38th and 39th highest bit
+   * This is because max bandwidth is limited by HdfsServerConstants.MAX_BANDWIDTH_PER_DATANODE which is 1TB/s
+   *
+   * Bandwidth is encoded in the last 36 bits, which is a limit of ((1L << 37) - 1) bytes/sec (~127GB/sec)
    */
-  
-  static long THROTTLER_SELECTOR_MASK = 0x7000000000000000L; //0111000000000000000000000000000000000000000000000000000000000000
-  static long BANDWIDTH_SELECTOR_MASK = 0x0FFFFFFFFFFFFFFFL; //0000111111111111111111111111111111111111111111111111111111111111
-  
+
   enum Throttler {
-    BALANCE, WRITE, TRANSFER
-  }
+    BALANCE(1L << 37, "balance") {
+      @Override
+      protected DataTransferThrottler selectThrottler(DataXceiverServer dxcs) {
+        return dxcs.balanceThrottler;
+      }
+    },
+    TRANSFER(1L << 38, "transfer") {
+      @Override
+      protected DataTransferThrottler selectThrottler(DataXceiverServer dxcs) {
+        return dxcs.getTransferThrottler();
+      }
+    },
+    WRITE(1L << 39, "write") {
+      @Override
+      protected DataTransferThrottler selectThrottler(DataXceiverServer dxcs) {
+        return dxcs.getWriteThrottler();
+      }
+    };
   
-  private Throttler decodeThrottlerType(long encodedBandwidthValue) {
-    long throttlerBits = (encodedBandwidthValue & THROTTLER_SELECTOR_MASK) >>> 60;  // Extract the 2nd, 3rd, and 4th highest bits
+    private final long mask;
+    private final String name;
+    
+    private static long BANDWIDTH_MASK = ~Throttler.combinedMask();
   
-    switch ((int) throttlerBits) {
-      case 2: return Throttler.TRANSFER;
-      case 3: return Throttler.WRITE;
-      default: return Throttler.BALANCE;
+    Throttler(long mask, String name) {
+      this.mask = mask;
+      this.name = name;
+    }
+    
+    static List<Throttler> decodeThrottler(long encodedBandwidthValue) {
+      List<Throttler> selectedThrottlers = new ArrayList<>();
+      for (Throttler throttler : Throttler.values()) {
+        if ((encodedBandwidthValue & throttler.mask) != 0) {
+          selectedThrottlers.add(throttler);
+        }
+      }
+      return selectedThrottlers;
+    }
+  
+    public void setBandwidth(DataXceiverServer dxcs, long encodedBandwidth) {
+      long bandwidth = decodeBandwidth(encodedBandwidth);
+      DataTransferThrottler throttler = selectThrottler(dxcs);
+      if (throttler != null) {
+        LOG.info("Updating " + name + " throttler bandwidth from "
+            + throttler.getBandwidth() + " bytes/s "
+            + "to: " + bandwidth + " bytes/s.");
+        throttler.setBandwidth(bandwidth);
+      }
+    }
+  
+    protected abstract DataTransferThrottler selectThrottler(DataXceiverServer dxcs);
+  
+    private static long combinedMask() {
+      long result = 0;
+      for (Throttler throttler : Throttler.values()) {
+        result |= throttler.mask;
+      }
+      return result;
+    }
+  
+    private long decodeBandwidth(long encodedBandwidthValue) {
+      return encodedBandwidthValue & BANDWIDTH_MASK;
     }
   }
   
-  private long decodeBandwidth(long encodedBandwidthValue) {
-    return encodedBandwidthValue & BANDWIDTH_SELECTOR_MASK; // Mask out the 4 highest bits to get bandwidth
-  }
- 
   /**
    * This method should handle commands from Standby namenode except
    * DNA_REGISTER which should be handled earlier itself.
