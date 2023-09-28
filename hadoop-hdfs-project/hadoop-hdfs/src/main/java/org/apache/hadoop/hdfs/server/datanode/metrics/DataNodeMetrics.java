@@ -301,10 +301,10 @@ public class DataNodeMetrics {
 
   public void incrBytesWrittenForBlockPoolId(String blockPoolId, int delta) {
     bytesWrittenPerBlockPoolId.computeIfAbsent(blockPoolId, bpid -> {
-      String sanitizedBpid = blockPoolId.replaceAll("[^a-zA-Z0-9]", "_");
+      String sanitizedBpid = bpid.replaceAll("[^a-zA-Z0-9]", "_");
       return registry.newCounter(
           "BytesWritten_bpid_" + sanitizedBpid,
-          "BytesWritten for blocks of BlocPoolId " + blockPoolId,
+          "BytesWritten for blocks of BlocPoolId " + bpid,
           0L
       );
     });
