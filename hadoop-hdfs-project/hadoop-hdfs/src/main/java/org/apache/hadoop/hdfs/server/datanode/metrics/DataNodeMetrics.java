@@ -19,6 +19,8 @@ package org.apache.hadoop.hdfs.server.datanode.metrics;
 
 import static org.apache.hadoop.metrics2.impl.MsInfo.SessionId;
 
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.hdfs.DFSConfigKeys;
@@ -55,6 +57,7 @@ import java.util.concurrent.ThreadLocalRandom;
 @Metrics(about="DataNode metrics", context="dfs")
 public class DataNodeMetrics {
 
+  private final ConcurrentMap<String, MutableCounterLong> bytesWrittenPerBlockPoolId = new ConcurrentHashMap<>();
   @Metric MutableCounterLong bytesWritten;
   @Metric("Milliseconds spent writing")
   MutableCounterLong totalWriteTime;
@@ -294,6 +297,18 @@ public class DataNodeMetrics {
 
   public void incrBlocksRemoved(int delta) {
     blocksRemoved.incr(delta);
+  }
+
+  public void incrBytesWrittenForBlockPoolId(String blockPoolId, int delta) {
+    bytesWrittenPerBlockPoolId.computeIfAbsent(blockPoolId, bpid -> {
+      String sanitizedBpid = bpid.replaceAll("[^a-zA-Z0-9]", "_");
+      return registry.newCounter(
+          "BytesWritten_bpid_" + sanitizedBpid,
+          "BytesWritten for blocks of BlockPoolId " + bpid,
+          0L
+      );
+    });
+    bytesWrittenPerBlockPoolId.get(blockPoolId).incr(delta);
   }
 
   public void incrBytesWritten(int delta) {
