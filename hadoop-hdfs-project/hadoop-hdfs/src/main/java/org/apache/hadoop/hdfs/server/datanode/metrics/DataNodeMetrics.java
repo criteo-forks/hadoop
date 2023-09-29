@@ -304,7 +304,7 @@ public class DataNodeMetrics {
       String sanitizedBpid = bpid.replaceAll("[^a-zA-Z0-9]", "_");
       return registry.newCounter(
           "BytesWritten_bpid_" + sanitizedBpid,
-          "BytesWritten for blocks of BlocPoolId " + bpid,
+          "BytesWritten for blocks of BlockPoolId " + bpid,
           0L
       );
     });
