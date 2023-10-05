@@ -2536,9 +2536,9 @@ public class DataNode extends ReconfigurableBase
       this.cachingStrategy =
           new CachingStrategy(true, getDnConf().readaheadLength);
       if (isTransfer(stage, clientname)) {
-        this.throttler = xserver.getTransferThrottler();
+        this.throttler = xserver.getTransferThrottler(b.getBlockPoolId());
       } else if(isWrite(stage)) {
-        this.throttler = xserver.getWriteThrottler();
+        this.throttler = xserver.getWriteThrottler(b.getBlockPoolId());
       }
     }
 

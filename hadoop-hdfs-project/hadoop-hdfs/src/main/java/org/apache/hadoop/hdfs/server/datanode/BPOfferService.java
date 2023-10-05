@@ -828,13 +828,13 @@ class BPOfferService {
     TRANSFER(1L << 38, "transfer") {
       @Override
       protected DataTransferThrottler selectThrottler(DataXceiverServer dxcs) {
-        return dxcs.getTransferThrottler();
+        return dxcs.getTransferThrottler(null);
       }
     },
     WRITE(1L << 39, "write") {
       @Override
       protected DataTransferThrottler selectThrottler(DataXceiverServer dxcs) {
-        return dxcs.getWriteThrottler();
+        return dxcs.getWriteThrottler(null);
       }
     };
   
