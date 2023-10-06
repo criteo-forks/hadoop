@@ -849,8 +849,8 @@ class BPOfferService {
     }
   
     public void setBandwidth(DataXceiverServer dxcs, long encodedBandwidth) {
-      long bandwidthMBperSec = decodeBandwidth(encodedBandwidth);
-      long bandwidth = bandwidthMBperSec * 1024 * 1024;
+      // Bandwidth is encoded in MB/sec
+      long bandwidth = decodeBandwidth(encodedBandwidth) * 1024 * 1024;
       DataTransferThrottler throttler = selectThrottlerStrategy.apply(dxcs);
       if (throttler != null) {
         LOG.info("Updating " + name + " throttler bandwidth from "
