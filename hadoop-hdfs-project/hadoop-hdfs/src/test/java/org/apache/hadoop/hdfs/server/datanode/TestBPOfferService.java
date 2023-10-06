@@ -24,6 +24,8 @@ import org.apache.hadoop.fs.Path;
 import org.apache.hadoop.fs.StorageType;
 import org.apache.hadoop.hdfs.HdfsConfiguration;
 import org.apache.hadoop.hdfs.MiniDFSCluster;
+import org.apache.hadoop.hdfs.server.common.HdfsServerConstants;
+import org.apache.hadoop.hdfs.server.datanode.BPOfferService.Throttler;
 import org.apache.hadoop.hdfs.server.protocol.SlowDiskReports;
 
 import static org.apache.hadoop.test.MetricsAsserts.assertCounter;
@@ -1216,4 +1218,72 @@ public class TestBPOfferService {
       }
     }
   }
+  
+  @Test
+  public void testThrottlerBandwidthUpdate() {
+    // Balance throttler only (1st bit)
+    long encodedBandwidth = 0b0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0001L;
+    List<Throttler> throttlers = Throttler.decodeThrottler(encodedBandwidth);
+    assertEquals(Collections.singletonList(Throttler.BALANCE), throttlers);
+    assertEquals(1, throttlers.get(0).decodeBandwidth(encodedBandwidth));
+    
+    // Transfer throttler only (14th bit)
+    encodedBandwidth = 0b0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0000_0010_0000_0000_0000L;
+    throttlers = Throttler.decodeThrottler(encodedBandwidth);
+    assertEquals(Collections.singletonList(Throttler.TRANSFER), throttlers);
+    assertEquals(1, throttlers.get(0).decodeBandwidth(encodedBandwidth));
+    
+    // Write throttler only (27th bit)
+    encodedBandwidth = 0b0000_0000_0000_0000_0000_0000_0000_0000_0000_0100_0000_0000_0000_0000_0000_0000L;
+    throttlers = Throttler.decodeThrottler(encodedBandwidth);
+    assertEquals(Collections.singletonList(Throttler.WRITE), throttlers);
+    assertEquals(1, throttlers.get(0).decodeBandwidth(encodedBandwidth));
+    
+    // All 3 set to 1
+    encodedBandwidth = 0b0000_0000_0000_0000_0000_0000_0000_0000_0000_0100_0000_0000_0010_0000_0000_0001L;
+    throttlers = Throttler.decodeThrottler(encodedBandwidth);
+    assertEquals(3, throttlers.size());
+    assertTrue(throttlers.contains(Throttler.BALANCE));
+    assertTrue(throttlers.contains(Throttler.TRANSFER));
+    assertTrue(throttlers.contains(Throttler.WRITE));
+    for (Throttler throttler : throttlers) {
+      assertEquals(1, throttler.decodeBandwidth(encodedBandwidth));
+    }
+    
+    // All 3 at max value (2^13 -1)
+    encodedBandwidth = 0b0000_0000_0000_0000_0000_0000_0111_1111_1111_1111_1111_1111_1111_1111_1111_1111L;
+    assertTrue(encodedBandwidth < HdfsServerConstants.MAX_BANDWIDTH_PER_DATANODE);
+    throttlers = Throttler.decodeThrottler(encodedBandwidth);
+    assertEquals(3, throttlers.size());
+    assertTrue(throttlers.contains(Throttler.BALANCE));
+    assertTrue(throttlers.contains(Throttler.TRANSFER));
+    assertTrue(throttlers.contains(Throttler.WRITE));
+    for (Throttler throttler : throttlers) {
+      assertEquals(8191, throttler.decodeBandwidth(encodedBandwidth));
+    }
+    
+    // All 3 with 100 for balance 200 for transfer and 300 for write
+    encodedBandwidth = 0b0000_0000_0000_0000_0000_0000_0000_0100_1011_0000_0001_1001_0000_0000_0110_0100L;
+    throttlers = Throttler.decodeThrottler(encodedBandwidth);
+    assertEquals(3, throttlers.size());
+    assertTrue(throttlers.contains(Throttler.BALANCE));
+    assertTrue(throttlers.contains(Throttler.TRANSFER));
+    assertTrue(throttlers.contains(Throttler.WRITE));
+    for (Throttler throttler : throttlers) {
+      long expected = 0;
+      switch (throttler) {
+        case BALANCE:
+          expected = 100;
+          break;
+        case TRANSFER:
+          expected = 200;
+          break;
+        case WRITE:
+          expected = 300;
+          break;
+      }
+      assertEquals(expected, throttler.decodeBandwidth(encodedBandwidth));
+    }
+  }
+  
 }

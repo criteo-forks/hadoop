@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.hdfs.server.datanode;
 
+import java.util.function.Function;
 import org.apache.hadoop.hdfs.util.DataTransferThrottler;
 import org.apache.hadoop.thirdparty.com.google.common.annotations.VisibleForTesting;
 import org.apache.hadoop.thirdparty.com.google.common.base.Preconditions;
@@ -812,46 +813,35 @@ class BPOfferService {
    *
    * Utility enum for DatanodeProtocol.DNA_BALANCERBANDWIDTHUPDATE
    *
-   * The bandwidth value is a long that contains the type of throttlers in the 37th, 38th and 39th highest bit
+   * 3 bandwidth values for the 3 throttlers are encoded in the smallest 39 bits.
    * This is because max bandwidth is limited by HdfsServerConstants.MAX_BANDWIDTH_PER_DATANODE which is 1TB/s
    *
-   * Bandwidth is encoded in the last 36 bits, which is a limit of ((1L << 37) - 1) bytes/sec (~127GB/sec)
+   * The unit is MB/sec (as we are not interested in throttling below 1MB/sec).
+   *
+   * Thanks to that each throttler has 13 bits available to encode its bandwidth value, up to 8191 MB/s
    */
 
   enum Throttler {
-    BALANCE(1L << 37, "balance") {
-      @Override
-      protected DataTransferThrottler selectThrottler(DataXceiverServer dxcs) {
-        return dxcs.balanceThrottler;
-      }
-    },
-    TRANSFER(1L << 38, "transfer") {
-      @Override
-      protected DataTransferThrottler selectThrottler(DataXceiverServer dxcs) {
-        return dxcs.getTransferThrottler(null);
-      }
-    },
-    WRITE(1L << 39, "write") {
-      @Override
-      protected DataTransferThrottler selectThrottler(DataXceiverServer dxcs) {
-        return dxcs.getWriteThrottler(null);
-      }
-    };
+    BALANCE(0, 0x1FFF, "balance", dxcs -> dxcs.balanceThrottler),
+    TRANSFER(13, 0x1FFF, "transfer", dxcs -> dxcs.getTransferThrottler(null)),
+    WRITE(26, 0x1FFF, "write", dxcs -> dxcs.getWriteThrottler(null));
   
+    private final int shift;
     private final long mask;
     private final String name;
+    private final Function<DataXceiverServer, DataTransferThrottler> selectThrottlerStrategy;
     
-    private static long BANDWIDTH_MASK = ~Throttler.combinedMask();
-  
-    Throttler(long mask, String name) {
+    Throttler(int shift, long mask, String name, Function<DataXceiverServer, DataTransferThrottler> selectThrottlerStrategy) {
+      this.shift = shift;
       this.mask = mask;
       this.name = name;
+      this.selectThrottlerStrategy = selectThrottlerStrategy;
     }
     
     static List<Throttler> decodeThrottler(long encodedBandwidthValue) {
       List<Throttler> selectedThrottlers = new ArrayList<>();
       for (Throttler throttler : Throttler.values()) {
-        if ((encodedBandwidthValue & throttler.mask) != 0) {
+        if ((encodedBandwidthValue >>> throttler.shift & throttler.mask) != 0) {
           selectedThrottlers.add(throttler);
         }
       }
@@ -859,8 +849,9 @@ class BPOfferService {
     }
   
     public void setBandwidth(DataXceiverServer dxcs, long encodedBandwidth) {
-      long bandwidth = decodeBandwidth(encodedBandwidth);
-      DataTransferThrottler throttler = selectThrottler(dxcs);
+      // Bandwidth is encoded in MB/sec
+      long bandwidth = decodeBandwidth(encodedBandwidth) * 1024 * 1024;
+      DataTransferThrottler throttler = selectThrottlerStrategy.apply(dxcs);
       if (throttler != null) {
         LOG.info("Updating " + name + " throttler bandwidth from "
             + throttler.getBandwidth() + " bytes/s "
@@ -869,18 +860,9 @@ class BPOfferService {
       }
     }
   
-    protected abstract DataTransferThrottler selectThrottler(DataXceiverServer dxcs);
-  
-    private static long combinedMask() {
-      long result = 0;
-      for (Throttler throttler : Throttler.values()) {
-        result |= throttler.mask;
-      }
-      return result;
-    }
-  
-    private long decodeBandwidth(long encodedBandwidthValue) {
-      return encodedBandwidthValue & BANDWIDTH_MASK;
+    @VisibleForTesting
+    public long decodeBandwidth(long encodedBandwidthValue) {
+      return encodedBandwidthValue >>> shift & mask;
     }
   }
   
