@@ -906,7 +906,7 @@ class DataXceiver extends Receiver implements Runnable {
       if (blockReceiver != null) {
         String mirrorAddr = (mirrorSock == null) ? null : mirrorNode;
         blockReceiver.receiveBlock(mirrorOut, mirrorIn, replyOut, mirrorAddr,
-            dataXceiverServer.getWriteThrottler(), targets, false);
+            dataXceiverServer.getWriteThrottler(block.getBlockPoolId()), targets, false);
 
         // send close-ack for transfer-RBW/Finalized 
         if (isTransfer) {

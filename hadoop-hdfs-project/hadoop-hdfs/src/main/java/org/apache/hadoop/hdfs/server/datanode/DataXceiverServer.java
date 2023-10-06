@@ -20,7 +20,10 @@ package org.apache.hadoop.hdfs.server.datanode;
 import java.io.IOException;
 import java.net.SocketTimeoutException;
 import java.nio.channels.AsynchronousCloseException;
+import java.util.Collections;
 import java.util.HashMap;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.locks.Condition;
@@ -170,8 +173,10 @@ class DataXceiverServer implements Runnable {
   final BlockBalanceThrottler balanceThrottler;
 
   private final DataTransferThrottler transferThrottler;
+  private final Set<String> transferThrottlerExcludedBlockPools;
 
   private final DataTransferThrottler writeThrottler;
+  private final Set<String> writeThrottlerExcludedBlockPools;
 
   /**
    * Stores an estimate for block size to check if the disk partition has enough
@@ -204,8 +209,12 @@ class DataXceiverServer implements Runnable {
         DFSConfigKeys.DFS_DATANODE_DATA_TRANSFER_BANDWIDTHPERSEC_DEFAULT);
     if (bandwidthPerSec > 0) {
       this.transferThrottler = new DataTransferThrottler(bandwidthPerSec);
+      this.transferThrottlerExcludedBlockPools = new HashSet<>(conf.getStringCollection(
+          DFSConfigKeys.DFS_DATANODE_DATA_TRANSFER_THROTTLER_EXCLUDED_BLOCK_POOL_IDS_KEY
+      ));
     } else {
       this.transferThrottler = null;
+      this.transferThrottlerExcludedBlockPools = Collections.emptySet();
     }
 
     bandwidthPerSec = conf.getLongBytes(
@@ -213,8 +222,12 @@ class DataXceiverServer implements Runnable {
         DFSConfigKeys.DFS_DATANODE_DATA_WRITE_BANDWIDTHPERSEC_DEFAULT);
     if (bandwidthPerSec > 0) {
       this.writeThrottler = new DataTransferThrottler(bandwidthPerSec);
+      this.writeThrottlerExcludedBlockPools = new HashSet<>(conf.getStringCollection(
+          DFSConfigKeys.DFS_DATANODE_DATA_WRITE_THROTTLER_EXCLUDED_BLOCK_POOL_IDS_KEY
+      ));
     } else {
       this.writeThrottler = null;
+      this.writeThrottlerExcludedBlockPools = Collections.emptySet();
     }
   }
 
@@ -465,11 +478,17 @@ class DataXceiverServer implements Runnable {
     return peerServer;
   }
 
-  public DataTransferThrottler getTransferThrottler() {
+  public DataTransferThrottler getTransferThrottler(String blockPoolId) {
+    if (transferThrottlerExcludedBlockPools.contains(blockPoolId)) {
+      return null;
+    }
     return transferThrottler;
   }
 
-  public DataTransferThrottler getWriteThrottler() {
+  public DataTransferThrottler getWriteThrottler(String blockPoolId) {
+    if (writeThrottlerExcludedBlockPools.contains(blockPoolId)) {
+      return null;
+    }
     return writeThrottler;
   }
 
