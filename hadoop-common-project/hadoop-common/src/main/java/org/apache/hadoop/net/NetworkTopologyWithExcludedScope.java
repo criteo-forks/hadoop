@@ -8,11 +8,15 @@ import java.util.Set;
 import org.apache.hadoop.conf.Configurable;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.fs.CommonConfigurationKeysPublic;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /*
  * This class is intended to be used exclusively with BlockPlacementPolicyRackFaultTolerantWithExcludedScope
  */
 public class NetworkTopologyWithExcludedScope extends NetworkTopology implements Configurable {
+  
+  public static final Logger LOG = LoggerFactory.getLogger(NetworkTopologyWithExcludedScope.class);
   
   private Configuration conf;
   private String excludedScope;
@@ -45,6 +49,7 @@ public class NetworkTopologyWithExcludedScope extends NetworkTopology implements
       //       However, instances where `excludedScope` is provided are
       //       not used by BlockPlacementPolicyRackFaultTolerantWithExcludedScope for which this class is designed.
       //       In case some other usage have not been foreseen, we still implement a functionally valid variant.
+      LOG.warn("Using chooseRandom with excluded scope provided: " + excludedScope);
       Set<Node> newExcludedNodes = new HashSet<>(excludedNodes);
       newExcludedNodes.addAll(nodesFromExcludedScope);
       excludedNodes = newExcludedNodes;
