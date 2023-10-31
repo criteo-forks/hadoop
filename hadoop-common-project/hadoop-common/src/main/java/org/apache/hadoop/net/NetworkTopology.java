@@ -505,10 +505,12 @@ public class NetworkTopology {
       node = null;
     } else {
       node = getNode(excludedScope);
-      if (!(node instanceof InnerNode)) {
-        numOfDatanodes -= 1;
-      } else {
-        numOfDatanodes -= ((InnerNode)node).getNumOfLeaves();
+      if (node != null) {
+        if (!(node instanceof InnerNode)) {
+          numOfDatanodes -= 1;
+        } else {
+          numOfDatanodes -= ((InnerNode) node).getNumOfLeaves();
+        }
       }
     }
     if (numOfDatanodes <= 0) {
