@@ -2435,6 +2435,14 @@ public class YarnConfiguration extends Configuration {
   public static final String NM_DOCKER_DEFAULT_TMPFS_MOUNTS =
       DOCKER_CONTAINER_RUNTIME_PREFIX + "default-tmpfs-mounts";
 
+  /**
+   * True if containers filecache folder should be mounted in read write
+   * into all Docker containers that use DockerContainerRuntime
+   * Otherwise it will be mounted in RO mode
+   */
+  public static final String NM_DOCKER_FILECACHE_RW_MODE =
+      DOCKER_CONTAINER_RUNTIME_PREFIX  + "filecache-rw-mode";
+
   /** The mode in which the Java Container Sandbox should run detailed by
    *  the JavaSandboxLinuxContainerRuntime. */
   public static final String YARN_CONTAINER_SANDBOX =
