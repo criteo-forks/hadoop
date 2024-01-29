@@ -418,6 +418,14 @@ public class DatanodeAdminBackoffMonitor extends DatanodeAdminMonitorBase
           outstandingBlocks = getPendingCountForNode(dn);
         }
         LOG.info("Node {} has {} blocks yet to process", dn, outstandingBlocks);
+        if (LOG.isTraceEnabled()) {
+          List<BlockInfo> blockInfoList = pendingRep.get(dn);
+          if (blockInfoList != null) {
+            for (BlockInfo bi : blockInfoList) {
+              LOG.trace(bi.getBlockName());
+            }
+          }
+        }
         if (outstandingBlocks == 0) {
           removeList.add(dn);
         }
