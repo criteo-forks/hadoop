@@ -265,6 +265,8 @@ public class DockerLinuxContainerRuntime extends OCIContainerRuntime {
   private int userRemappingGidThreshold;
   private Set<String> capabilities;
   private boolean delayedRemovalAllowed;
+
+  private boolean fileCacheReadWriteMode;
   private Set<String> defaultROMounts = new HashSet<>();
   private Set<String> defaultRWMounts = new HashSet<>();
   private Set<String> defaultTmpfsMounts = new HashSet<>();
@@ -402,6 +404,9 @@ public class DockerLinuxContainerRuntime extends OCIContainerRuntime {
     defaultTmpfsMounts.addAll(Arrays.asList(
         conf.getTrimmedStrings(
         YarnConfiguration.NM_DOCKER_DEFAULT_TMPFS_MOUNTS)));
+    fileCacheReadWriteMode = conf.getBoolean(
+        YarnConfiguration.NM_DOCKER_FILECACHE_RW_MODE,
+        false);
   }
 
   @Override
@@ -688,8 +693,13 @@ public class DockerLinuxContainerRuntime extends OCIContainerRuntime {
     if (!serviceMode) {
       runCommand.addAllReadWriteMountLocations(containerLogDirs);
       runCommand.addAllReadWriteMountLocations(applicationLocalDirs);
-      runCommand.addAllReadOnlyMountLocations(filecacheDirs);
-      runCommand.addAllReadOnlyMountLocations(userFilecacheDirs);
+      if (fileCacheReadWriteMode) {
+        runCommand.addAllReadWriteMountLocations(userFilecacheDirs);
+        runCommand.addAllReadWriteMountLocations(filecacheDirs);
+      } else {
+        runCommand.addAllReadOnlyMountLocations(userFilecacheDirs);
+        runCommand.addAllReadOnlyMountLocations(filecacheDirs);
+      }
     }
 
     if (environment.containsKey(ENV_DOCKER_CONTAINER_MOUNTS)) {
