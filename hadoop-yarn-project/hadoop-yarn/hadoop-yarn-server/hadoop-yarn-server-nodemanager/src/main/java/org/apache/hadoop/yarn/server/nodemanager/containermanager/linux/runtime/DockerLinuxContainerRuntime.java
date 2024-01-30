@@ -612,7 +612,11 @@ public class DockerLinuxContainerRuntime extends OCIContainerRuntime {
         ENV_DOCKER_CONTAINER_DOCKER_SERVICE_MODE));
     boolean useEntryPoint = serviceMode || checkUseEntryPoint(environment);
 
-    if (selectedImage != null && allowedImages.containsKey(selectedImage)) {
+    if (selectedImage != null && !selectedImage.isEmpty()) {
+      if (!allowedImages.containsKey(selectedImage)) {
+        throw new ContainerExecutionException("Selected image '" + selectedImage + "' " +
+            "is not available in the allowed images list");
+      }
       imageName = allowedImages.get(selectedImage);
     }
     if (imageName == null || imageName.isEmpty()) {
