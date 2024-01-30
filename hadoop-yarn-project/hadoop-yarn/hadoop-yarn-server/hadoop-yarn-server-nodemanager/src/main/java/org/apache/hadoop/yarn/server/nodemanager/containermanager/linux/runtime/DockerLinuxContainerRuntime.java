@@ -1199,7 +1199,7 @@ public class DockerLinuxContainerRuntime extends OCIContainerRuntime {
       throws ContainerExecutionException {
     if (imageKeyAndName.length != 2) {
       throw new ContainerExecutionException("Allowed image entry '" + imageKeyAndName[0] + "=" + imageKeyAndName[1]
-          + "' doesn't match expected pattern 'key=image_name(:verison)?");
+          + "' doesn't match expected pattern 'key=image_name(:version)?");
     }
     if (!dockerImagePattern.matcher(imageKeyAndName[1]).matches()) {
       throw new ContainerExecutionException("Image name '" + imageKeyAndName[1]
