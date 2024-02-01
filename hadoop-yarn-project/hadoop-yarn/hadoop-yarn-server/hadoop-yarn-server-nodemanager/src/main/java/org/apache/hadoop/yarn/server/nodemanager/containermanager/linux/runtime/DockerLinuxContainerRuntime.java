@@ -614,8 +614,9 @@ public class DockerLinuxContainerRuntime extends OCIContainerRuntime {
 
     if (selectedImage != null && !selectedImage.isEmpty()) {
       if (!allowedImages.containsKey(selectedImage)) {
-        throw new ContainerExecutionException("Selected image '" + selectedImage + "' " +
-            "is not available in the allowed images list");
+        throw new ContainerExecutionException(
+            "Selected image '" + selectedImage + "' is not available in the allowed images list: [" +
+             String.join(",", allowedImages.keySet()) + "]");
       }
       imageName = allowedImages.get(selectedImage);
     }
