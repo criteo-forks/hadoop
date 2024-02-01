@@ -2286,6 +2286,9 @@ public class YarnConfiguration extends Configuration {
   public static final String NM_DOCKER_IMAGE_UPDATE =
       DOCKER_CONTAINER_RUNTIME_PREFIX + "image-update";
 
+  public static final String NM_DOCKER_ALLOWED_IMAGES =
+      DOCKER_CONTAINER_RUNTIME_PREFIX + "allowed-images";
+
   /** Capabilities allowed (and added by default) for docker containers. **/
   public static final String NM_DOCKER_CONTAINER_CAPABILITIES =
       DOCKER_CONTAINER_RUNTIME_PREFIX + "capabilities";

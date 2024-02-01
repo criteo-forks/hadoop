@@ -20,6 +20,7 @@
 
 package org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.runtime;
 
+import java.util.HashMap;
 import org.apache.hadoop.thirdparty.com.google.common.annotations.VisibleForTesting;
 import org.apache.hadoop.hdfs.protocol.datatransfer.IOStreamPair;
 import org.apache.hadoop.security.Credentials;
@@ -214,6 +215,10 @@ public class DockerLinuxContainerRuntime extends OCIContainerRuntime {
   @InterfaceAudience.Private
   public static final String ENV_DOCKER_CONTAINER_IMAGE =
       "YARN_CONTAINER_RUNTIME_DOCKER_IMAGE";
+
+  @InterfaceAudience.Private
+  public static final String ENV_DOCKER_SELECTED_CONTAINER_IMAGE =
+      "YARN_CONTAINER_RUNTIME_SELECTED_DOCKER_IMAGE";
   @InterfaceAudience.Private
   public static final String ENV_DOCKER_CONTAINER_NETWORK =
       "YARN_CONTAINER_RUNTIME_DOCKER_CONTAINER_NETWORK";
@@ -255,6 +260,7 @@ public class DockerLinuxContainerRuntime extends OCIContainerRuntime {
   private PrivilegedOperationExecutor privilegedOperationExecutor;
   private String defaultImageName;
   private Boolean defaultImageUpdate;
+  private final Map<String, String> allowedImages = new HashMap<>();
   private Set<String> allowedNetworks = new HashSet<>();
   private Set<String> allowedRuntimes = new HashSet<>();
   private String defaultNetwork;
@@ -336,6 +342,7 @@ public class DockerLinuxContainerRuntime extends OCIContainerRuntime {
     this.conf = conf;
 
     dockerClient = new DockerClient();
+    allowedImages.clear();
     allowedNetworks.clear();
     allowedRuntimes.clear();
     defaultROMounts.clear();
@@ -345,6 +352,14 @@ public class DockerLinuxContainerRuntime extends OCIContainerRuntime {
         YarnConfiguration.NM_DOCKER_IMAGE_NAME, "");
     defaultImageUpdate = conf.getBoolean(
         YarnConfiguration.NM_DOCKER_IMAGE_UPDATE, false);
+
+    String[] allowedImagesProperty = conf.get(YarnConfiguration.NM_DOCKER_ALLOWED_IMAGES, "").split(",");
+    for (String allowedImageEntry : allowedImagesProperty) {
+      String[] imageNameAndKey = allowedImageEntry.split("=");
+      validateAllowedImageEntry(imageNameAndKey);
+      allowedImages.put(imageNameAndKey[0], imageNameAndKey[1]);
+    }
+
     allowedNetworks.addAll(Arrays.asList(
         conf.getTrimmedStrings(
             YarnConfiguration.NM_DOCKER_ALLOWED_CONTAINER_NETWORKS,
@@ -594,6 +609,7 @@ public class DockerLinuxContainerRuntime extends OCIContainerRuntime {
     Map<String, String> environment = container.getLaunchContext()
         .getEnvironment();
     String imageName = environment.get(ENV_DOCKER_CONTAINER_IMAGE);
+    String selectedImage = environment.get(ENV_DOCKER_SELECTED_CONTAINER_IMAGE);
     String network = environment.get(ENV_DOCKER_CONTAINER_NETWORK);
     String hostname = environment.get(ENV_DOCKER_CONTAINER_HOSTNAME);
     String runtime = environment.get(ENV_DOCKER_CONTAINER_DOCKER_RUNTIME);
@@ -601,6 +617,14 @@ public class DockerLinuxContainerRuntime extends OCIContainerRuntime {
         ENV_DOCKER_CONTAINER_DOCKER_SERVICE_MODE));
     boolean useEntryPoint = serviceMode || checkUseEntryPoint(environment);
 
+    if (selectedImage != null && !selectedImage.isEmpty()) {
+      if (!allowedImages.containsKey(selectedImage)) {
+        throw new ContainerExecutionException(
+            "Selected image '" + selectedImage + "' is not available in the allowed images list: [" +
+             String.join(",", allowedImages.keySet()) + "]");
+      }
+      imageName = allowedImages.get(selectedImage);
+    }
     if (imageName == null || imageName.isEmpty()) {
       imageName = defaultImageName;
     }
@@ -1180,6 +1204,18 @@ public class DockerLinuxContainerRuntime extends OCIContainerRuntime {
     LOG.debug("Launching container with cmd: {}", command);
 
     return launchOp;
+  }
+
+  public static void validateAllowedImageEntry(String[] imageKeyAndName)
+      throws ContainerExecutionException {
+    if (imageKeyAndName.length != 2) {
+      throw new ContainerExecutionException("Allowed image entry '" + imageKeyAndName[0] + "=" + imageKeyAndName[1]
+          + "' doesn't match expected pattern 'key=image_name(:version)?");
+    }
+    if (!dockerImagePattern.matcher(imageKeyAndName[1]).matches()) {
+      throw new ContainerExecutionException("Image name '" + imageKeyAndName[1]
+          + "' doesn't match docker image name pattern");
+    }
   }
 
   public static void validateImageName(String imageName)
