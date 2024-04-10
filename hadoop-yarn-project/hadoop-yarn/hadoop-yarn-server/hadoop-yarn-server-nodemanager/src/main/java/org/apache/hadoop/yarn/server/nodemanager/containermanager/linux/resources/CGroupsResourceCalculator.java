@@ -78,6 +78,9 @@ public class CGroupsResourceCalculator extends ResourceCalculatorProcessTree {
 
   private static final Pattern CGROUP_FILE_FORMAT = Pattern.compile(
       "^(\\d+):([^:]+):/(.*)$");
+  private static final Pattern CONTAINER_ID_PATTERN = Pattern.compile(
+      "(container_[a-zA-Z0-9_]+)"
+  );
   private final String procfsDir;
   private CGroupsHandler cGroupsHandler;
 
@@ -322,9 +325,19 @@ public class CGroupsResourceCalculator extends ResourceCalculatorProcessTree {
           String cgroupPath = m.group(3);
 
           if (cgroupPath != null) {
-            String cgroup =
-                new File(cgroupPath).toPath().getFileName().toString();
-            result[0] = cGroupsHandler.getRelativePathForCGroup(cgroup);
+            if (pid.equals("1")) {
+              //This is a special case not intended to find a container cgroup
+              result[0] = "";
+            } else {
+              Matcher cm = CONTAINER_ID_PATTERN.matcher(cgroupPath);
+              boolean cmat = cm.find();
+              if (cmat) {
+                String containerId = cm.group(1);
+                result[0] = cGroupsHandler.getRelativePathForCGroup(containerId);
+              } else {
+                LOG.error("Found no container_id in cgroupPath " + cgroupPath + " for " + pidCgroupFile);
+              }
+            }
           } else {
             LOG.warn("Invalid cgroup path for " + pidCgroupFile);
           }
@@ -383,6 +396,26 @@ public class CGroupsResourceCalculator extends ResourceCalculatorProcessTree {
     memStat = new File(memDir, MEM_STAT);
     kmemStat = new File(memDir, KMEM_STAT);
     memswStat = new File(memDir, MEMSW_STAT);
+  }
+  
+  @VisibleForTesting
+  public File getCpuStat() {
+    return this.cpuStat;
+  }
+  
+  @VisibleForTesting
+  public File getMemStat() {
+    return this.memStat;
+  }
+  
+  @VisibleForTesting
+  public File getKmemStat() {
+    return this.kmemStat;
+  }
+  
+  @VisibleForTesting
+  public File getMemswStat() {
+    return this.memswStat;
   }
 
 }
