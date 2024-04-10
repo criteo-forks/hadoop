@@ -100,6 +100,40 @@ public class TestCGroupsResourceCalculator {
       FileUtils.deleteDirectory(new File(basePath));
     }
   }
+  
+  @Test
+  public void testCgroupWithDocker() throws Exception {
+    File procfs = new File(basePath + "/1234");
+    Assert.assertTrue("Setup error", procfs.mkdirs());
+    try {
+      FileUtils.writeStringToFile(
+          new File(procfs, CGroupsResourceCalculator.CGROUP),
+          "7:devices:/yarn/container_1/de5b77f2cdf6b5e87de9c23da5bc07de0d69f010af503dcd15832a3389c31565\n" +
+              "6:cpuacct,cpu:/yarn/container_1/de5b77f2cdf6b5e87de9c23da5bc07de0d69f010af503dcd15832a3389c31565\n" +
+              "5:pids:/yarn/container_1/de5b77f2cdf6b5e87de9c23da5bc07de0d69f010af503dcd15832a3389c31565\n" +
+              "4:memory:/yarn/container_1/de5b77f2cdf6b5e87de9c23da5bc07de0d69f010af503dcd15832a3389c31565\n", StandardCharsets.UTF_8);
+    
+      CGroupsResourceCalculator calculator =
+          new CGroupsResourceCalculator(
+              "1234", basePath,
+              cGroupsHandler, clock, 10);
+      calculator.setCGroupFilePaths();
+      Assert.assertEquals("cpuStat should be an existing path",
+          "/yarn/container_1/cpuacct.stat",
+          calculator.getCpuStat().toString());
+      Assert.assertEquals("memStat should be an existing path",
+          "/yarn/container_1/memory.stat",
+          calculator.getMemStat().toString());
+      Assert.assertEquals("kmemStat should be an existing path",
+          "/yarn/container_1/memory.kmem.usage_in_bytes",
+          calculator.getKmemStat().toString());
+      Assert.assertEquals("memswStat should be an existing path",
+          "/yarn/container_1/memory.memsw.usage_in_bytes",
+          calculator.getMemswStat().toString());
+    } finally {
+      FileUtils.deleteDirectory(new File(basePath));
+    }
+  }
 
   @Test
   public void testCPUParsing() throws Exception {
