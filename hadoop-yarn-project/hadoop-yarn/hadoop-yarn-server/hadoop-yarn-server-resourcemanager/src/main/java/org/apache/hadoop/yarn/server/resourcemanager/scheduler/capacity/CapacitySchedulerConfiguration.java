@@ -106,6 +106,10 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
     PREFIX + MAXIMUM_AM_RESOURCE_SUFFIX;
 
   @Private
+  public static final String SKIP_AM_LIMIT_ENFORCEMENT_FOR_FIRST_APP_SUFFIX =
+      "skip-am-limit-enforcement-for-first-app";
+
+  @Private
   public static final String QUEUES = "queues";
   
   @Private
@@ -445,6 +449,10 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
     return maxApplicationsPerQueue;
   }
 
+  public boolean getSkipAmLimitForFirstApp(String queuePath) {
+    return getBoolean(queuePath + SKIP_AM_LIMIT_ENFORCEMENT_FOR_FIRST_APP_SUFFIX,
+        true);
+  }
   /**
    * Get the maximum am resource percent per queue setting.
    * @param queue name of the queue

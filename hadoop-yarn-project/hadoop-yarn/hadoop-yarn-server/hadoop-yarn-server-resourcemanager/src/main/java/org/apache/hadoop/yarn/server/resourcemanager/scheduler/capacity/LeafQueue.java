@@ -91,6 +91,8 @@ public class LeafQueue extends AbstractCSQueue {
   
   private float maxAMResourcePerQueuePercent;
 
+  private boolean skipAmLimitForFirstApp;
+
   private volatile int nodeLocalityDelay;
   private volatile int rackLocalityAdditionalDelay;
   private volatile boolean rackLocalityFullReset;
@@ -205,6 +207,8 @@ public class LeafQueue extends AbstractCSQueue {
       maxAMResourcePerQueuePercent =
           conf.getMaximumApplicationMasterResourcePerQueuePercent(
               getQueuePath());
+
+      skipAmLimitForFirstApp = conf.getSkipAmLimitForFirstApp(getQueuePath());
 
       priorityAcls = conf.getPriorityAcls(getQueuePath(),
           scheduler.getMaxClusterLevelAppPriority());
@@ -817,10 +821,12 @@ public class LeafQueue extends AbstractCSQueue {
               + " AM node-partition name " + partitionName);
         }
 
+        // Prevent scheduling a first app requiring gpu
         if (!resourceCalculator.fitsIn(amIfStarted, amLimit)) {
-          if (getNumActiveApplications() < 1 || (Resources.lessThanOrEqual(
+          if ((getNumActiveApplications() < 1 && skipAmLimitForFirstApp)
+              || Resources.lessThanOrEqual(
               resourceCalculator, lastClusterResource,
-              queueUsage.getAMUsed(partitionName), Resources.none()))) {
+              queueUsage.getAMUsed(partitionName), Resources.none())) {
             LOG.warn("maximum-am-resource-percent is insufficient to start a"
                 + " single application in queue, it is likely set too low."
                 + " skipping enforcement to allow at least one application"
@@ -849,10 +855,12 @@ public class LeafQueue extends AbstractCSQueue {
             application.getAMResource(partitionName),
             user.getConsumedAMResources(partitionName));
 
+        // Prevent scheduling a first app requiring gpu
         if (!resourceCalculator.fitsIn(userAmIfStarted, userAMLimit)) {
-          if (getNumActiveApplications() < 1 || (Resources.lessThanOrEqual(
+          if ((getNumActiveApplications() < 1 && skipAmLimitForFirstApp)
+              || Resources.lessThanOrEqual(
               resourceCalculator, lastClusterResource,
-              queueUsage.getAMUsed(partitionName), Resources.none()))) {
+              queueUsage.getAMUsed(partitionName), Resources.none())) {
             LOG.warn("maximum-am-resource-percent is insufficient to start a"
                 + " single application in queue for user, it is likely set too"
                 + " low. skipping enforcement to allow at least one application"
