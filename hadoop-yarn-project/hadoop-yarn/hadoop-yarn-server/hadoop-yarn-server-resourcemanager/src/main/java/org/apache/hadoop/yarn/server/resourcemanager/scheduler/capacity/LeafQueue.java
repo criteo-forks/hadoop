@@ -823,10 +823,9 @@ public class LeafQueue extends AbstractCSQueue {
 
         // Prevent scheduling a first app requiring gpu
         if (!resourceCalculator.fitsIn(amIfStarted, amLimit)) {
-          if ((getNumActiveApplications() < 1 && skipAmLimitForFirstApp)
-              || Resources.lessThanOrEqual(
+          if (skipAmLimitForFirstApp && (getNumActiveApplications() < 1 || Resources.lessThanOrEqual(
               resourceCalculator, lastClusterResource,
-              queueUsage.getAMUsed(partitionName), Resources.none())) {
+              queueUsage.getAMUsed(partitionName), Resources.none()))) {
             LOG.warn("maximum-am-resource-percent is insufficient to start a"
                 + " single application in queue, it is likely set too low."
                 + " skipping enforcement to allow at least one application"
@@ -857,10 +856,9 @@ public class LeafQueue extends AbstractCSQueue {
 
         // Prevent scheduling a first app requiring gpu
         if (!resourceCalculator.fitsIn(userAmIfStarted, userAMLimit)) {
-          if ((getNumActiveApplications() < 1 && skipAmLimitForFirstApp)
-              || Resources.lessThanOrEqual(
+          if (skipAmLimitForFirstApp && (getNumActiveApplications() < 1 || Resources.lessThanOrEqual(
               resourceCalculator, lastClusterResource,
-              queueUsage.getAMUsed(partitionName), Resources.none())) {
+              queueUsage.getAMUsed(partitionName), Resources.none()))) {
             LOG.warn("maximum-am-resource-percent is insufficient to start a"
                 + " single application in queue for user, it is likely set too"
                 + " low. skipping enforcement to allow at least one application"
