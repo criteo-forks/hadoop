@@ -449,9 +449,13 @@ public class CapacitySchedulerConfiguration extends ReservationSchedulerConfigur
     return maxApplicationsPerQueue;
   }
 
-  public boolean getSkipAmLimitForFirstApp(String queuePath) {
-    return getBoolean(queuePath + SKIP_AM_LIMIT_ENFORCEMENT_FOR_FIRST_APP_SUFFIX,
-        true);
+  public boolean getSkipAmLimitForFirstApp(String queuePath, CSQueue parent) {
+    if (parent == null){
+      return getBoolean(getQueuePrefix(queuePath) + SKIP_AM_LIMIT_ENFORCEMENT_FOR_FIRST_APP_SUFFIX, true);
+    } else {
+      return getBoolean(getQueuePrefix(queuePath) +  SKIP_AM_LIMIT_ENFORCEMENT_FOR_FIRST_APP_SUFFIX,
+          this.getSkipAmLimitForFirstApp(parent.getQueuePath(), parent.getParent()));
+    }
   }
   /**
    * Get the maximum am resource percent per queue setting.

@@ -208,7 +208,7 @@ public class LeafQueue extends AbstractCSQueue {
           conf.getMaximumApplicationMasterResourcePerQueuePercent(
               getQueuePath());
 
-      skipAmLimitForFirstApp = conf.getSkipAmLimitForFirstApp(getQueuePath());
+      skipAmLimitForFirstApp = conf.getSkipAmLimitForFirstApp(getQueuePath(), parent);
 
       priorityAcls = conf.getPriorityAcls(getQueuePath(),
           scheduler.getMaxClusterLevelAppPriority());
