@@ -821,7 +821,6 @@ public class LeafQueue extends AbstractCSQueue {
               + " AM node-partition name " + partitionName);
         }
 
-        // Prevent scheduling a first app requiring gpu
         if (!resourceCalculator.fitsIn(amIfStarted, amLimit)) {
           if (skipAmLimitForFirstApp && (getNumActiveApplications() < 1 || Resources.lessThanOrEqual(
               resourceCalculator, lastClusterResource,
@@ -854,7 +853,6 @@ public class LeafQueue extends AbstractCSQueue {
             application.getAMResource(partitionName),
             user.getConsumedAMResources(partitionName));
 
-        // Prevent scheduling a first app requiring gpu
         if (!resourceCalculator.fitsIn(userAmIfStarted, userAMLimit)) {
           if (skipAmLimitForFirstApp && (getNumActiveApplications() < 1 || Resources.lessThanOrEqual(
               resourceCalculator, lastClusterResource,
