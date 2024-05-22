@@ -62,7 +62,7 @@ extends AbstractDelegationTokenIdentifier>
       }
     }
 
-    LOG.warn("Could no find suitable token  for <kind: " + kindName + ", service: " + service + ">.");
+    LOG.warn("Could not find suitable token  for <kind: " + kindName + ", service: " + service + ">.");
     LOG.warn("This will likely produce an AuthenticationException. Current tokens within security context:");
     for (Token<? extends TokenIdentifier> token : tokens) {
       LOG.warn("\t- <kind: " + token.getKind() + ", service: " + token.getService() + ">");
