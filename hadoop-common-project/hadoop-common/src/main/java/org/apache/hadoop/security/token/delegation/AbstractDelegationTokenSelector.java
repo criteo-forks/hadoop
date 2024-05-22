@@ -26,6 +26,8 @@ import org.apache.hadoop.io.Text;
 import org.apache.hadoop.security.token.Token;
 import org.apache.hadoop.security.token.TokenIdentifier;
 import org.apache.hadoop.security.token.TokenSelector;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /**
  * Look through tokens to find the first delegation token that matches the
@@ -37,6 +39,9 @@ public
 class AbstractDelegationTokenSelector<TokenIdent 
 extends AbstractDelegationTokenIdentifier> 
     implements TokenSelector<TokenIdent> {
+
+  private static final Logger LOG = LoggerFactory.getLogger(AbstractDelegationTokenSelector.class);
+
   private Text kindName;
   
   protected AbstractDelegationTokenSelector(Text kindName) {
@@ -56,6 +61,13 @@ extends AbstractDelegationTokenIdentifier>
         return (Token<TokenIdent>) token;
       }
     }
+
+    LOG.warn("Could no find suitable token  for <kind: " + kindName + ", service: " + service + ">.");
+    LOG.warn("This will likely produce an AuthenticationException. Current tokens within security context:");
+    for (Token<? extends TokenIdentifier> token : tokens) {
+      LOG.warn("\t- <kind: " + token.getKind() + ", service: " + token.getService() + ">");
+    }
+
     return null;
   }
 }
