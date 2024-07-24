@@ -1165,6 +1165,7 @@ public class ResourceManager extends CompositeService
       // For expired events, also look in the inactive set
       // This happens for the following cases:
       //   - included node that never connected
+      //   - decommissioning node that never connected
       if (node == null && event.getType().equals(RMNodeEventType.EXPIRE)) {
         node = this.rmContext.getInactiveRMNodes().get(nodeId);
       }

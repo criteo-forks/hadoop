@@ -137,6 +137,8 @@ public class ResourceTrackerService extends AbstractService implements
   private boolean checkIpHostnameInRegistration;
   private boolean timelineServiceV2Enabled;
 
+  private Integer gracefulDecomAtStartupTimeout;
+
   public ResourceTrackerService(RMContext rmContext,
       NodesListManager nodesListManager,
       NMLivelinessMonitor nmLivelinessMonitor,
@@ -194,6 +196,10 @@ public class ResourceTrackerService extends AbstractService implements
       isDelegatedCentralizedNodeLabelsConf =
           YarnConfiguration.isDelegatedCentralizedNodeLabelConfiguration(conf);
     }
+
+    gracefulDecomAtStartupTimeout = conf.getInt(
+        YarnConfiguration.RM_NODE_GRACEFUL_DECOMMISSION_TIMEOUT,
+        YarnConfiguration.DEFAULT_RM_NODE_GRACEFUL_DECOMMISSION_TIMEOUT);
 
     loadDynamicResourceConfiguration(conf);
     decommissioningWatcher.init(conf);
@@ -433,6 +439,7 @@ public class ResourceTrackerService extends AbstractService implements
       RMNodeStartedEvent startEvent = new RMNodeStartedEvent(nodeId,
           request.getNMContainerStatuses(),
           request.getRunningApplications());
+      startEvent.setGracefulDecomAtStartupTimeout(gracefulDecomAtStartupTimeout);
       if (request.getLogAggregationReportsForApps() != null
           && !request.getLogAggregationReportsForApps().isEmpty()) {
         if (LOG.isDebugEnabled()) {
@@ -467,8 +474,10 @@ public class ResourceTrackerService extends AbstractService implements
             .handle(new NodeRemovedSchedulerEvent(rmNode));
 
         this.rmContext.getRMNodes().put(nodeId, rmNode);
+        RMNodeStartedEvent startEvent = new RMNodeStartedEvent(nodeId, null, null);
+        startEvent.setGracefulDecomAtStartupTimeout(gracefulDecomAtStartupTimeout);
         this.rmContext.getDispatcher().getEventHandler()
-            .handle(new RMNodeStartedEvent(nodeId, null, null));
+            .handle(startEvent);
       } else {
         // Reset heartbeat ID since node just restarted.
         oldNode.resetLastNodeHeartBeatResponse();
@@ -842,7 +851,11 @@ public class ResourceTrackerService extends AbstractService implements
    */
   private boolean isNodeInDecommissioning(NodeId nodeId) {
     RMNode rmNode = this.rmContext.getRMNodes().get(nodeId);
-
+    if (rmNode == null) {
+      //For RM restart: try to check if there is a decommissioning in inactive set
+      NodeId unknownNodeId = NodesListManager.createUnknownNodeId(nodeId.getHost());
+      rmNode = this.rmContext.getInactiveRMNodes().get(unknownNodeId);
+    }
     if (rmNode != null) {
       NodeState state = rmNode.getState();
 
