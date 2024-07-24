@@ -122,6 +122,12 @@ public class ResourceTrackerService extends AbstractService implements
   private int minAllocVcores;
 
   private DecommissioningNodesWatcher decommissioningWatcher;
+  // Explicitly put the getter here so that it's visible
+  // This is required to be used by NodeListManger to manage RMNode objects
+  // existence for all declared NM at startup
+  public NMLivelinessMonitor getNMLivelinessMonitor() {
+    return nmLivelinessMonitor;
+  }
 
   private boolean isDistributedNodeLabelsConf;
   private boolean isDelegatedCentralizedNodeLabelsConf;

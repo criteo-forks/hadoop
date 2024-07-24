@@ -877,6 +877,8 @@ public class RMNodeImpl implements RMNode, EventHandler<RMNodeEvent> {
             rmNode.context.getInactiveRMNodes().remove(unknownNodeId);
         if (previousRMNode != null) {
           rmNode.decrementMetricBasedOnPreviousNodeState(previousRMNode.getState());
+          // The NM might have been tracked since startup, clean it
+          rmNode.context.getResourceTrackerService().getNMLivelinessMonitor().unregister(unknownNodeId);
         }
         // Increment activeNodes explicitly because this is a new node.
         ClusterMetrics.getMetrics().incrNumActiveNodes();
