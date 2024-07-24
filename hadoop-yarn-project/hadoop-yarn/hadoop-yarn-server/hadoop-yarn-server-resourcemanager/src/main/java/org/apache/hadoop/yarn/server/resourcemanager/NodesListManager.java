@@ -269,7 +269,8 @@ public class NodesListManager extends CompositeService implements
           rmContext, host, -1, -1, new UnknownNode(host),
           Resource.newInstance(0, 0), "unknown");
       rmContext.getInactiveRMNodes().put(nodeId, rmNode);
-      rmNode.handle(new RMNodeEvent(nodeId, RMNodeEventType.EXPIRE));
+      //If the NM never connects, we should consider it as LOST
+      rmContext.getResourceTrackerService().getNMLivelinessMonitor().register(nodeId);
     }
   }
 

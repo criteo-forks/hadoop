@@ -1162,6 +1162,12 @@ public class ResourceManager extends CompositeService
     public void handle(RMNodeEvent event) {
       NodeId nodeId = event.getNodeId();
       RMNode node = this.rmContext.getRMNodes().get(nodeId);
+      // For expired events, also look in the inactive set
+      // This happens for the following cases:
+      //   - included node that never connected
+      if (node == null && event.getType().equals(RMNodeEventType.EXPIRE)) {
+        node = this.rmContext.getInactiveRMNodes().get(nodeId);
+      }
       if (node != null) {
         try {
           ((EventHandler<RMNodeEvent>) node).handle(event);
