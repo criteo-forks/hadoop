@@ -222,6 +222,9 @@ public class RMNodeImpl implements RMNode, EventHandler<RMNodeEvent> {
       .addTransition(NodeState.NEW, NodeState.LOST,
           RMNodeEventType.EXPIRE,
           new DeactivateNodeTransition(NodeState.LOST))
+      .addTransition(NodeState.NEW, NodeState.DECOMMISSIONING,
+          RMNodeEventType.GRACEFUL_DECOMMISSION,
+          new DeactivateNodeTransition(NodeState.DECOMMISSIONING))
 
       //Transitions from RUNNING state
       .addTransition(NodeState.RUNNING,
@@ -292,9 +295,9 @@ public class RMNodeImpl implements RMNode, EventHandler<RMNodeEvent> {
           RMNodeEventType.GRACEFUL_DECOMMISSION,
           new DecommissioningNodeTransition(NodeState.DECOMMISSIONING,
               NodeState.DECOMMISSIONING))
-      .addTransition(NodeState.DECOMMISSIONING, NodeState.LOST,
+      .addTransition(NodeState.DECOMMISSIONING, EnumSet.of(NodeState.DECOMMISSIONED, NodeState.LOST),
           RMNodeEventType.EXPIRE,
-          new DeactivateNodeTransition(NodeState.LOST))
+          new ExpireDecommissioningNodeTransition())
       .addTransition(NodeState.DECOMMISSIONING, NodeState.REBOOTED,
           RMNodeEventType.REBOOTING,
           new DeactivateNodeTransition(NodeState.REBOOTED))
@@ -794,6 +797,10 @@ public class RMNodeImpl implements RMNode, EventHandler<RMNodeEvent> {
     }
 
     switch (finalState) {
+    //DECOMMISSIONING can be considered an inactive state at RM restart
+    case DECOMMISSIONING:
+      metrics.incrDecommissioningNMs();
+      break;
     case DECOMMISSIONED:
       metrics.incrDecommisionedNMs();
       break;
@@ -879,6 +886,17 @@ public class RMNodeImpl implements RMNode, EventHandler<RMNodeEvent> {
           rmNode.decrementMetricBasedOnPreviousNodeState(previousRMNode.getState());
           // The NM might have been tracked since startup, clean it
           rmNode.context.getResourceTrackerService().getNMLivelinessMonitor().unregister(unknownNodeId);
+          if (previousRMNode.getState().equals(NodeState.DECOMMISSIONING)) {
+            // This case correspond to excluded nodes at RM restart.
+            // Out of this transition, the newly added node state will be RUNNING.
+            // We trigger the transition for GRACEFUL DECOMMISSION async
+            // so that the  newly added node goes through the entire transition from NEW to RUNNING
+            // then almost instantly goes to DECOMMISSIONING state (or DECOMMISSIONED in the node was drained).
+            // A consequence is that the timeout for graceful decommission is reset.
+            rmNode.context.getDispatcher().getEventHandler().handle(
+                    new RMNodeDecommissioningEvent(nodeId, startEvent.getGracefulDecomAtStartupTimeout())
+            );
+          }
         }
         // Increment activeNodes explicitly because this is a new node.
         ClusterMetrics.getMetrics().incrNumActiveNodes();
@@ -1093,6 +1111,22 @@ public class RMNodeImpl implements RMNode, EventHandler<RMNodeEvent> {
     @Override
     public void transition(RMNodeImpl rmNode, RMNodeEvent event) {
       RMNodeImpl.deactivateNode(rmNode, finalState);
+    }
+  }
+
+  public static class ExpireDecommissioningNodeTransition
+    implements MultipleArcTransition<RMNodeImpl, RMNodeEvent, NodeState> {
+
+    @Override
+    public NodeState transition(RMNodeImpl rmNode, RMNodeEvent rmNodeEvent) {
+      if (rmNode.getNodeID().getPort() == -1) {
+        // This is a DECOMMISSIONING node created at startup, this one should become DECOMMISSIONED
+        RMNodeImpl.deactivateNode(rmNode, NodeState.DECOMMISSIONED);
+        return NodeState.DECOMMISSIONED;
+      } else {
+        RMNodeImpl.deactivateNode(rmNode, NodeState.LOST);
+        return NodeState.LOST;
+      }
     }
   }
 

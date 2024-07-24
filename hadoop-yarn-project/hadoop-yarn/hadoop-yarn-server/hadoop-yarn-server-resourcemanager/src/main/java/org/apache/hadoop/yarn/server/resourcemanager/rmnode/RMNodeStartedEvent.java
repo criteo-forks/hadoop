@@ -30,6 +30,7 @@ public class RMNodeStartedEvent extends RMNodeEvent {
   private List<NMContainerStatus> containerStatuses;
   private List<ApplicationId> runningApplications;
   private List<LogAggregationReport> logAggregationReportsForApps;
+  private Integer gracefulDecomAtStartupTimeout;
 
   public RMNodeStartedEvent(NodeId nodeId,
       List<NMContainerStatus> containerReports,
@@ -54,5 +55,13 @@ public class RMNodeStartedEvent extends RMNodeEvent {
   public void setLogAggregationReportsForApps(
       List<LogAggregationReport> logAggregationReportsForApps) {
     this.logAggregationReportsForApps = logAggregationReportsForApps;
+  }
+
+  public Integer getGracefulDecomAtStartupTimeout() {
+    return gracefulDecomAtStartupTimeout;
+  }
+
+  public void setGracefulDecomAtStartupTimeout(Integer gracefulDecomAtStartupTimeout) {
+    this.gracefulDecomAtStartupTimeout = gracefulDecomAtStartupTimeout;
   }
 }
