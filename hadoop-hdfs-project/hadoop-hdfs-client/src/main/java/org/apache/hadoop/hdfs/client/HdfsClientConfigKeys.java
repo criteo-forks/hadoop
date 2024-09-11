@@ -48,6 +48,9 @@ public interface HdfsClientConfigKeys {
   String DFS_WEBHDFS_OAUTH_ENABLED_KEY = "dfs.webhdfs.oauth2.enabled";
   boolean DFS_WEBHDFS_OAUTH_ENABLED_DEFAULT = false;
 
+  String DFS_WEBHDFS_URI_CANONICALIZE = "dfs.webhdfs.host.canonicalize.enabled";
+  boolean DFS_WEBHDFS_URI_CANONICALIZE_DEFAULT = false;
+
   String DFS_WEBHDFS_REST_CSRF_ENABLED_KEY = "dfs.webhdfs.rest-csrf.enabled";
   boolean DFS_WEBHDFS_REST_CSRF_ENABLED_DEFAULT = false;
   String DFS_WEBHDFS_REST_CSRF_CUSTOM_HEADER_KEY =

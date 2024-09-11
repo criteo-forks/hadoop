@@ -250,6 +250,21 @@ public class WebHdfsFileSystem extends FileSystem
     this.uri = URI.create(uri.getScheme() + "://" + uri.getAuthority());
     this.nnAddrs = resolveNNAddr();
 
+    boolean canonicalizeWebHdfsUri = conf.getBoolean(
+            HdfsClientConfigKeys.DFS_WEBHDFS_URI_CANONICALIZE,
+            HdfsClientConfigKeys.DFS_WEBHDFS_URI_CANONICALIZE_DEFAULT
+    );
+
+    if (canonicalizeWebHdfsUri) {
+      for (int i = 0; i < nnAddrs.length; i++) {
+        InetSocketAddress nonCanonicalizedAddr = nnAddrs[i];
+        nnAddrs[i] = new InetSocketAddress(
+                nonCanonicalizedAddr.getAddress().getCanonicalHostName(),
+                nonCanonicalizedAddr.getPort()
+        );
+      }
+    }
+
     boolean isHA = HAUtilClient.isClientFailoverConfigured(conf, this.uri);
     boolean isLogicalUri = isHA && HAUtilClient.isLogicalUri(conf, this.uri);
     // In non-HA or non-logical URI case, the code needs to call
