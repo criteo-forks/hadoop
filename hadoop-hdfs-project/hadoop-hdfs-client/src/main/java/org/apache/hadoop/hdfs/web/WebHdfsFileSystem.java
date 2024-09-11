@@ -251,8 +251,8 @@ public class WebHdfsFileSystem extends FileSystem
     this.nnAddrs = resolveNNAddr();
 
     boolean canonicalizeWebHdfsUri = conf.getBoolean(
-            HdfsClientConfigKeys.DFS_WEBHDFS_URI_CANONICALIZE,
-            HdfsClientConfigKeys.DFS_WEBHDFS_URI_CANONICALIZE_DEFAULT
+            HdfsClientConfigKeys.DFS_WEBHDFS_HOST_CANONICALIZE_ENABLED_KEY,
+            HdfsClientConfigKeys.DFS_WEBHDFS_HOST_CANONICALIZE_ENABLED_DEFAULT
     );
 
     if (canonicalizeWebHdfsUri) {
