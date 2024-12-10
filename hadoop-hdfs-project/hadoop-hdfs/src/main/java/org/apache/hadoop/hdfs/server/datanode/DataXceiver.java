@@ -570,7 +570,7 @@ class DataXceiver extends Receiver implements Runnable {
       final long blockOffset,
       final long length,
       final boolean sendChecksum,
-      final CachingStrategy cachingStrategy) throws IOException {
+      CachingStrategy cachingStrategy) throws IOException {
     previousOpClientName = clientName;
     long read = 0;
     updateCurrentThreadName("Sending block " + block);
@@ -578,6 +578,9 @@ class DataXceiver extends Receiver implements Runnable {
     DataOutputStream out = getBufferedOutputStream();
     checkAccess(out, true, block, blockToken, Op.READ_BLOCK,
         BlockTokenIdentifier.AccessMode.READ);
+
+    //override the caching strategy by the one enforced at datanode level
+    cachingStrategy = new CachingStrategy(dnConf.dropCacheBehindReads, dnConf.readaheadLength);
 
     // send the block
     BlockSender blockSender = null;
@@ -694,6 +697,9 @@ class DataXceiver extends Receiver implements Runnable {
     long size = 0;
     // reply to upstream datanode or client 
     final DataOutputStream replyOut = getBufferedOutputStream();
+
+    //override the caching strategy by the one enforced at datanode level
+    cachingStrategy = new CachingStrategy(dnConf.dropCacheBehindWrites, dnConf.readaheadLength);
 
     int nst = targetStorageTypes.length;
     StorageType[] storageTypes = new StorageType[nst + 1];
