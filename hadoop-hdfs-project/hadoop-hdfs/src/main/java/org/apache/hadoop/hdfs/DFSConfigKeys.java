@@ -134,6 +134,8 @@ public class DFSConfigKeys extends CommonConfigurationKeys {
   @Deprecated
   public static final long    DFS_DATANODE_READAHEAD_BYTES_DEFAULT =
       HdfsClientConfigKeys.DFS_DATANODE_READAHEAD_BYTES_DEFAULT;
+  public static final String  DFS_DATANODE_CACHE_USE_DATANODE_CACHING_STRATEGIES_KEY = "dfs.datanode.cache.use-datanode-caching-strategies";
+  public static final boolean  DFS_DATANODE_CACHE_USE_DATANODE_CACHING_STRATEGIES_DEFAULT = false;
   public static final String  DFS_DATANODE_DROP_CACHE_BEHIND_WRITES_KEY = "dfs.datanode.drop.cache.behind.writes";
   public static final boolean DFS_DATANODE_DROP_CACHE_BEHIND_WRITES_DEFAULT = false;
   public static final String  DFS_DATANODE_SYNC_BEHIND_WRITES_KEY = "dfs.datanode.sync.behind.writes";

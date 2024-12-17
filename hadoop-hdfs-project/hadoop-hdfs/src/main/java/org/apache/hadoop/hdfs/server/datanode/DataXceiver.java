@@ -122,6 +122,9 @@ class DataXceiver extends Receiver implements Runnable {
   private final int smallBufferSize;
   private Thread xceiver = null;
 
+  private final CachingStrategy readCachingStrategy;
+  private final CachingStrategy writeCachingStrategy;
+
   /**
    * Client Name used in previous operation. Not available on first request
    * on the socket.
@@ -150,6 +153,9 @@ class DataXceiver extends Receiver implements Runnable {
     remoteAddressWithoutPort =
         (colonIdx < 0) ? remoteAddress : remoteAddress.substring(0, colonIdx);
     localAddress = peer.getLocalAddressString();
+
+    this.readCachingStrategy = new CachingStrategy(dnConf.dropCacheBehindReads, dnConf.readaheadLength);
+    this.writeCachingStrategy = new CachingStrategy(dnConf.dropCacheBehindWrites, dnConf.readaheadLength);
 
     LOG.debug("Number of active connections is: {}",
         datanode.getXceiverCount());
@@ -570,7 +576,7 @@ class DataXceiver extends Receiver implements Runnable {
       final long blockOffset,
       final long length,
       final boolean sendChecksum,
-      final CachingStrategy cachingStrategy) throws IOException {
+      CachingStrategy cachingStrategy) throws IOException {
     previousOpClientName = clientName;
     long read = 0;
     updateCurrentThreadName("Sending block " + block);
@@ -578,6 +584,11 @@ class DataXceiver extends Receiver implements Runnable {
     DataOutputStream out = getBufferedOutputStream();
     checkAccess(out, true, block, blockToken, Op.READ_BLOCK,
         BlockTokenIdentifier.AccessMode.READ);
+
+    if (dnConf.useDatanodeCachingStrategies) {
+      //override the caching strategy by the one enforced at datanode level
+      cachingStrategy = this.readCachingStrategy;
+    }
 
     // send the block
     BlockSender blockSender = null;
@@ -694,6 +705,11 @@ class DataXceiver extends Receiver implements Runnable {
     long size = 0;
     // reply to upstream datanode or client 
     final DataOutputStream replyOut = getBufferedOutputStream();
+
+    if (dnConf.useDatanodeCachingStrategies) {
+      //override the caching strategy by the one enforced at datanode level
+      cachingStrategy = this.writeCachingStrategy;
+    }
 
     int nst = targetStorageTypes.length;
     StorageType[] storageTypes = new StorageType[nst + 1];
