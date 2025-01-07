@@ -2025,7 +2025,7 @@ public class BlockManager implements BlockStatsMXBean {
       namesystem.writeUnlock();
 
       if (replicationWorkTimingLog.isDebugEnabled()) {
-        replicationWorkTimingLog.debug("ReplicationWork... Hold write lock for {} nanos in computeBlockReconstructionWork Step-1",
+        replicationWorkTimingLog.debug("ReplicationWork... Hold write lock for {} nanos in computeReconstructionWorkForBlocks Step-1",
                 System.nanoTime() - start);
       }
     }
@@ -2076,7 +2076,7 @@ public class BlockManager implements BlockStatsMXBean {
       namesystem.writeUnlock();
 
       if (replicationWorkTimingLog.isDebugEnabled()) {
-        replicationWorkTimingLog.debug("ReplicationWork... Hold write lock for {} nanos in computeBlockReconstructionWork Step-3",
+        replicationWorkTimingLog.debug("ReplicationWork... Hold write lock for {} nanos in computeReconstructionWorkForBlocks Step-3",
                 System.nanoTime() - start);
       }
     }
