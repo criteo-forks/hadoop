@@ -109,6 +109,9 @@ public class TestDataNodeMXBean extends SaslDataTransferTestCase {
       int xmitsInProgress =
           (Integer) mbs.getAttribute(mxbeanName, "XmitsInProgress");
       Assert.assertEquals(datanode.getXmitsInProgress(), xmitsInProgress);
+      int xmitsConcurrent =
+              (Integer) mbs.getAttribute(mxbeanName, "XmitsConcurrent");
+      Assert.assertEquals(datanode.getXmitsConcurrent(), xmitsConcurrent);
       String bpActorInfo = (String)mbs.getAttribute(mxbeanName,
           "BPServiceActorInfo");
       Assert.assertEquals(datanode.getBPServiceActorInfo(), bpActorInfo);

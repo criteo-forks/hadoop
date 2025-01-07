@@ -116,6 +116,12 @@ public interface DataNodeMXBean {
   public int getXmitsInProgress();
 
   /**
+   * Returns an estimate of the number of data replication/reconstruction tasks
+   * that are running effectively in parallel.
+   */
+  public int getXmitsConcurrent();
+
+  /**
    * Gets the network error counts on a per-Datanode basis.
    */
   public Map<String, Map<String, Long>> getDatanodeNetworkCounts();

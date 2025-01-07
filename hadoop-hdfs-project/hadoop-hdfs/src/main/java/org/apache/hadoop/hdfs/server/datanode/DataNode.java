@@ -84,13 +84,7 @@ import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
 import java.util.UUID;
-import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
-import java.util.concurrent.ScheduledThreadPoolExecutor;
-import java.util.concurrent.TimeUnit;
+import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import javax.annotation.Nullable;
@@ -331,6 +325,7 @@ public class DataNode extends ReconfigurableBase
   private String clusterId = null;
 
   final AtomicInteger xmitsInProgress = new AtomicInteger();
+  final AtomicInteger xmitsConcurrent = new AtomicInteger();
   Daemon dataXceiverServer = null;
   DataXceiverServer xserver = null;
   Daemon localDataXceiverServer = null;
@@ -410,6 +405,8 @@ public class DataNode extends ReconfigurableBase
 
   private final SocketFactory socketFactory;
 
+  private Semaphore concurrentXferSemaphore;
+
   private static Tracer createTracer(Configuration conf) {
     return new Tracer.Builder("DataNode").
         conf(TraceUtils.wrapHadoopConf(DATANODE_HTRACE_PREFIX , conf)).
@@ -487,6 +484,12 @@ public class DataNode extends ReconfigurableBase
     this.volumeChecker = new DatasetVolumeChecker(conf, new Timer());
     this.xferService =
         HadoopExecutors.newCachedThreadPool(new Daemon.DaemonFactory());
+    int concurrentXferCount = conf.getInt(
+        DFSConfigKeys.DFS_DATANODE_REPLICATION_NON_EC_STREAMS_CONCURRENT_COUNT_KEY,
+        DFSConfigKeys.DFS_DATANODE_REPLICATION_NON_EC_STREAMS_CONCURRENT_COUNT_DEFAULT);
+    if (concurrentXferCount > 0) {
+      this.concurrentXferSemaphore = new Semaphore(concurrentXferCount);
+    }
 
     // Determine whether we should try to pass file descriptors to clients.
     if (conf.getBoolean(HdfsClientConfigKeys.Read.ShortCircuit.KEY,
@@ -2275,6 +2278,11 @@ public class DataNode extends ReconfigurableBase
   public int getXmitsInProgress() {
     return xmitsInProgress.get();
   }
+
+  @Override //DataNodeMXBean
+  public int getXmitsConcurrent() {
+    return xmitsConcurrent.get();
+  }
   
   /**
    * Increments the xmitsInProgress count. xmitsInProgress count represents the
@@ -2282,6 +2290,15 @@ public class DataNode extends ReconfigurableBase
    */
   public void incrementXmitsInProgress() {
     xmitsInProgress.getAndIncrement();
+  }
+
+  /**
+   * Increments the xmitsInConcurrent count. xmitsInProgress count represents the
+   * number of data replication/reconstruction tasks queued and xmitsInConcurrent
+   * represents the number of concurrent inFlight replication/reconstruction.
+   */
+  public void incrementXmitsConcurrent() {
+    xmitsConcurrent.getAndIncrement();
   }
 
   /**
@@ -2300,6 +2317,13 @@ public class DataNode extends ReconfigurableBase
    */
   public void decrementXmitsInProgress() {
     xmitsInProgress.getAndDecrement();
+  }
+
+  /**
+   * Decrements the xmitsConcurrent count
+   */
+  public void decrementXmitsConcurrent() {
+    xmitsConcurrent.getAndDecrement();
   }
 
   /**
@@ -2497,6 +2521,7 @@ public class DataNode extends ReconfigurableBase
    * sends a piece of data to another DataNode.
    */
   private class DataTransfer implements Runnable {
+
     final DatanodeInfo[] targets;
     final StorageType[] targetStorageTypes;
     final private String[] targetStorageIds;
@@ -2555,6 +2580,14 @@ public class DataNode extends ReconfigurableBase
       final boolean isClient = clientname.length() > 0;
       
       try {
+
+        if (concurrentXferSemaphore != null) {
+          // Prevent too many concurrent inflight transfers
+          concurrentXferSemaphore.acquire();
+        }
+
+        incrementXmitsConcurrent();
+
         final String dnAddr = targets[0].getXferAddr(connectToDnViaHostname);
         InetSocketAddress curTarget = NetUtils.createSocketAddr(dnAddr);
         LOG.debug("Connecting to datanode {}", dnAddr);
@@ -2630,7 +2663,13 @@ public class DataNode extends ReconfigurableBase
       } catch (Throwable t) {
         LOG.error("Failed to transfer block " + b, t);
       } finally {
+
+        if (concurrentXferSemaphore != null) {
+          concurrentXferSemaphore.release();
+        }
+
         decrementXmitsInProgress();
+        decrementXmitsConcurrent();
         IOUtils.closeStream(blockSender);
         IOUtils.closeStream(out);
         IOUtils.closeStream(in);
