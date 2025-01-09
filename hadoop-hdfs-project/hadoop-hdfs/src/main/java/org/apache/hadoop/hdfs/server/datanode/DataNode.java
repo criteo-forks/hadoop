@@ -2528,7 +2528,6 @@ public class DataNode extends ReconfigurableBase
    * sends a piece of data to another DataNode.
    */
   private class DataTransfer implements Runnable {
-
     final DatanodeInfo[] targets;
     final StorageType[] targetStorageTypes;
     final private String[] targetStorageIds;
