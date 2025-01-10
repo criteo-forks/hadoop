@@ -291,6 +291,8 @@ public class DFSConfigKeys extends CommonConfigurationKeys {
   public static final int     DFS_NAMENODE_REPLICATION_MAX_STREAMS_DEFAULT = 2;
   public static final String  DFS_NAMENODE_REPLICATION_STREAMS_HARD_LIMIT_KEY = "dfs.namenode.replication.max-streams-hard-limit";
   public static final int     DFS_NAMENODE_REPLICATION_STREAMS_HARD_LIMIT_DEFAULT = 4;
+  public static final String  DFS_DATANODE_REPLICATION_NON_EC_STREAMS_CONCURRENT_COUNT_KEY = "dfs.datanode.replication.non-ec.streams.concurrent.count";
+  public static final int     DFS_DATANODE_REPLICATION_NON_EC_STREAMS_CONCURRENT_COUNT_DEFAULT = 0; //no limit
   public static final String DFS_NAMENODE_STORAGEINFO_DEFRAGMENT_INTERVAL_MS_KEY
       = "dfs.namenode.storageinfo.defragment.interval.ms";
   public static final int
