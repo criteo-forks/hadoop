@@ -164,6 +164,7 @@ public class BlockManager implements BlockStatsMXBean {
 
   public static final Logger LOG = LoggerFactory.getLogger(BlockManager.class);
   public static final Logger blockLog = NameNode.blockStateChangeLog;
+  public static final Logger replicationWorkTimingLog = LoggerFactory.getLogger("ReplicationWorkTiming");
 
   private static final String QUEUE_REASON_CORRUPT_STATE =
     "it has the wrong state or generation stamp";
@@ -1954,8 +1955,14 @@ public class BlockManager implements BlockStatsMXBean {
    *         iteration.
    */
   int computeBlockReconstructionWork(int blocksToProcess) {
+    long start = 0;
     List<List<BlockInfo>> blocksToReconstruct = null;
     namesystem.writeLock();
+
+    if (replicationWorkTimingLog.isDebugEnabled()) {
+      start = System.nanoTime();
+    }
+
     try {
       boolean reset = false;
       if (replQueueResetToHeadThreshold > 0) {
@@ -1971,6 +1978,11 @@ public class BlockManager implements BlockStatsMXBean {
           .chooseLowRedundancyBlocks(blocksToProcess, reset);
     } finally {
       namesystem.writeUnlock();
+
+      if (replicationWorkTimingLog.isDebugEnabled()) {
+        replicationWorkTimingLog.debug("ReplicationWork for {} blocks. Hold write lock for {} nanos in computeBlockReconstructionWork",
+                blocksToProcess, System.nanoTime() - start);
+      }
     }
     return computeReconstructionWorkForBlocks(blocksToReconstruct);
   }
@@ -1985,11 +1997,17 @@ public class BlockManager implements BlockStatsMXBean {
   @VisibleForTesting
   int computeReconstructionWorkForBlocks(
       List<List<BlockInfo>> blocksToReconstruct) {
+    long start = 0;
     int scheduledWork = 0;
     List<BlockReconstructionWork> reconWork = new ArrayList<>();
 
     // Step 1: categorize at-risk blocks into replication and EC tasks
     namesystem.writeLock();
+
+    if (replicationWorkTimingLog.isDebugEnabled()) {
+      start = System.nanoTime();
+    }
+
     try {
       synchronized (neededReconstruction) {
         for (int priority = 0; priority < blocksToReconstruct
@@ -2005,6 +2023,11 @@ public class BlockManager implements BlockStatsMXBean {
       }
     } finally {
       namesystem.writeUnlock();
+
+      if (replicationWorkTimingLog.isDebugEnabled()) {
+        replicationWorkTimingLog.debug("ReplicationWork... Hold write lock for {} nanos in computeReconstructionWorkForBlocks Step-1",
+                System.nanoTime() - start);
+      }
     }
 
     // Step 2: choose target nodes for each reconstruction task
@@ -2030,6 +2053,11 @@ public class BlockManager implements BlockStatsMXBean {
 
     // Step 3: add tasks to the DN
     namesystem.writeLock();
+
+    if (replicationWorkTimingLog.isDebugEnabled()) {
+      start = System.nanoTime();
+    }
+
     try {
       for (BlockReconstructionWork rw : reconWork) {
         final DatanodeStorageInfo[] targets = rw.getTargets();
@@ -2046,6 +2074,11 @@ public class BlockManager implements BlockStatsMXBean {
       }
     } finally {
       namesystem.writeUnlock();
+
+      if (replicationWorkTimingLog.isDebugEnabled()) {
+        replicationWorkTimingLog.debug("ReplicationWork... Hold write lock for {} nanos in computeReconstructionWorkForBlocks Step-3",
+                System.nanoTime() - start);
+      }
     }
 
     if (blockLog.isDebugEnabled()) {
