@@ -1159,6 +1159,9 @@ public class ContainerLaunch implements Callable<Integer> {
     public abstract void copyDebugInformation(Path src, Path dst)
         throws IOException;
 
+    public abstract void criteoHookScript()
+        throws IOException;
+
     /**
      * Method to dump debug information to a target file. This method will
      * be called by ContainerExecutor when setting up the container launch
@@ -1350,6 +1353,12 @@ public class ContainerLaunch implements Callable<Integer> {
     }
 
     @Override
+    public void criteoHookScript() throws IOException {
+      echo("Launching criteo hook script");
+      line("bash -c \"${CRITEO_HOOK_SCRIPT:-\"echo 'No hook script defined. Skipping...'\"}\"");
+    }
+
+    @Override
     public void listDebugInformation(Path output) throws  IOException {
       line("# Determining directory contents");
       line("echo \"ls -l:\" 1>\"", output.toString(), "\"");
@@ -1521,6 +1530,11 @@ public class ContainerLaunch implements Callable<Integer> {
       line("rem Creating copy of launch script");
       lineWithLenCheck(String.format("copy \"%s\" \"%s\"", src.toString(),
           dest.toString()));
+    }
+
+    @Override
+    public void criteoHookScript() throws IOException {
+      throw new IOException("Criteo hook script not implemented for windows shell");
     }
 
     @Override
