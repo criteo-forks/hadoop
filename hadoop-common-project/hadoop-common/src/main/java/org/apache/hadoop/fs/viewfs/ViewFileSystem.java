@@ -1308,7 +1308,7 @@ public class ViewFileSystem extends FileSystem {
     }
     InodeTree.ResolveResult<FileSystem> res = fsState.resolve(
         getUriPath(p), true);
-    return res.targetFileSystem.getStatus(p);
+    return res.targetFileSystem.getStatus(res.remainingPath);
   }
 
   /**
