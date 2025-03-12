@@ -1931,7 +1931,9 @@ public class PBHelperClient {
     RollingUpgradeStatusProto status = proto.getStatus();
     return new RollingUpgradeInfo(status.getBlockPoolId(),
         proto.getCreatedRollbackImages(),
-        proto.getStartTime(), proto.getFinalizeTime());
+        proto.getStartTime(), proto.getFinalizeTime(),
+        status.getLastAllocatedContiguousBlockId(),
+        status.getLastAllocatedStripedBlockId());
   }
 
   public static DatanodeStorageReport[] convertDatanodeStorageReports(
@@ -2607,12 +2609,16 @@ public class PBHelperClient {
     return RollingUpgradeStatusProto.newBuilder()
         .setBlockPoolId(status.getBlockPoolId())
         .setFinalized(status.isFinalized())
+        .setLastAllocatedContiguousBlockId(status.getLastAllocatedContiguousBlockId())
+        .setLastAllocatedStripedBlockId(status.getLastAllocatedStripedBlockId())
         .build();
   }
 
   public static RollingUpgradeStatus convert(RollingUpgradeStatusProto proto) {
     return new RollingUpgradeStatus(proto.getBlockPoolId(),
-        proto.getFinalized());
+        proto.getFinalized(),
+        proto.getLastAllocatedContiguousBlockId(),
+        proto.getLastAllocatedStripedBlockId());
   }
 
   public static RollingUpgradeInfoProto convert(RollingUpgradeInfo info) {

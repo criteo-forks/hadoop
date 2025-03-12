@@ -39,19 +39,36 @@ public class HeartbeatResponse {
 
   private final boolean isSlownode;
 
+  private final long generationStampV1Limit;
+
   public HeartbeatResponse(DatanodeCommand[] cmds,
       NNHAStatusHeartbeat haStatus, RollingUpgradeStatus rollingUpdateStatus,
       long fullBlockReportLeaseId) {
-    this(cmds, haStatus, rollingUpdateStatus, fullBlockReportLeaseId, false);
+    this(cmds, haStatus, rollingUpdateStatus, fullBlockReportLeaseId, 0, false);
   }
 
   public HeartbeatResponse(DatanodeCommand[] cmds,
       NNHAStatusHeartbeat haStatus, RollingUpgradeStatus rollingUpdateStatus,
       long fullBlockReportLeaseId, boolean isSlownode) {
+    this(cmds, haStatus, rollingUpdateStatus, fullBlockReportLeaseId, 0, isSlownode);
+  }
+
+  public HeartbeatResponse(DatanodeCommand[] cmds,
+      NNHAStatusHeartbeat haStatus, RollingUpgradeStatus rollingUpdateStatus,
+      long fullBlockReportLeaseId, long generationStampV1Limit) {
+    this(cmds, haStatus, rollingUpdateStatus, fullBlockReportLeaseId,
+        generationStampV1Limit, false);
+  }
+
+  public HeartbeatResponse(DatanodeCommand[] cmds,
+      NNHAStatusHeartbeat haStatus, RollingUpgradeStatus rollingUpdateStatus,
+      long fullBlockReportLeaseId, long generationStampV1Limit,
+      boolean isSlownode) {
     commands = cmds;
     this.haStatus = haStatus;
     this.rollingUpdateStatus = rollingUpdateStatus;
     this.fullBlockReportLeaseId = fullBlockReportLeaseId;
+    this.generationStampV1Limit = generationStampV1Limit;
     this.isSlownode = isSlownode;
   }
   
@@ -73,5 +90,9 @@ public class HeartbeatResponse {
 
   public boolean getIsSlownode() {
     return isSlownode;
+  }
+
+  public long getGenerationStampV1Limit() {
+    return generationStampV1Limit;
   }
 }

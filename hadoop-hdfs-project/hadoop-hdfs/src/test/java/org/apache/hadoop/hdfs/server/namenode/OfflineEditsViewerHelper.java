@@ -133,7 +133,9 @@ public class OfflineEditsViewerHelper {
         dfs.getDefaultBlockSize(), 0);
 
     // OP_ROLLING_UPGRADE_START
-    cluster.getNamesystem().getEditLog().logStartRollingUpgrade(Time.now());
+    cluster.getNamesystem().getEditLog().logStartRollingUpgrade(Time.now(),
+            cluster.getNamesystem().getBlockManager().getBlockIdManager().getLastAllocatedContiguousBlockId(),
+            cluster.getNamesystem().getBlockManager().getBlockIdManager().getLastAllocatedStripedBlockId());
     // OP_ROLLING_UPGRADE_FINALIZE
     cluster.getNamesystem().getEditLog().logFinalizeRollingUpgrade(Time.now());
 

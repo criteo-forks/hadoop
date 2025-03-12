@@ -160,7 +160,7 @@ public class TestBlockRecovery2 {
         .thenReturn(new HeartbeatResponse(
             new DatanodeCommand[0],
             new NNHAStatusHeartbeat(HAServiceProtocol.HAServiceState.ACTIVE, 1),
-            null, ThreadLocalRandom.current().nextLong() | 1L));
+            null, ThreadLocalRandom.current().nextLong() | 1L, 0));
 
     dn = new DataNode(conf, locations, null, null) {
       @Override

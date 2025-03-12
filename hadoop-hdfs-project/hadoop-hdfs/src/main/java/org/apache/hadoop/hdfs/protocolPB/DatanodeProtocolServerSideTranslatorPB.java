@@ -153,6 +153,7 @@ public class DatanodeProtocolServerSideTranslatorPB implements
 
     builder.setFullBlockReportLeaseId(response.getFullBlockReportLeaseId());
     builder.setIsSlownode(response.getIsSlownode());
+    builder.setGenerationStampV1Limit(response.getGenerationStampV1Limit());
     return builder.build();
   }
 
