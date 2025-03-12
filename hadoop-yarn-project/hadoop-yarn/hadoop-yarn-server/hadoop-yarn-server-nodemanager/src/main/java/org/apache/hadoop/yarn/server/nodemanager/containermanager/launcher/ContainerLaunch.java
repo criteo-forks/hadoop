@@ -39,6 +39,7 @@ import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.LinkedHashSet;
+import java.util.Locale;
 import java.util.Map;
 import java.util.Map.Entry;
 import java.util.Set;
@@ -66,6 +67,7 @@ import org.apache.hadoop.yarn.api.ApplicationConstants.Environment;
 import org.apache.hadoop.yarn.api.records.ContainerExitStatus;
 import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.api.records.ContainerLaunchContext;
+import org.apache.hadoop.yarn.api.records.ResourceInformation;
 import org.apache.hadoop.yarn.api.records.SignalContainerCommand;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.event.Dispatcher;
@@ -1628,6 +1630,11 @@ public class ContainerLaunch implements Callable<Integer> {
     addToEnvMap(environment, nmVars, Environment.CONTAINER_ID.name(),
         container.getContainerId().toString());
 
+    for (ResourceInformation resourceInformation : container.getResource().getResources()) {
+      addToEnvMap(environment, nmVars, "CONTAINER_RESOURCE_" + toEnvVarName(resourceInformation.getName()),
+              Long.toString(resourceInformation.getValue()));
+    }
+
     addToEnvMap(environment, nmVars, Environment.NM_PORT.name(),
       String.valueOf(this.context.getNodeId().getPort()));
 
@@ -1717,6 +1724,10 @@ public class ContainerLaunch implements Callable<Integer> {
         }
       }
     }
+  }
+
+  private String toEnvVarName(String s) {
+    return s.toUpperCase(Locale.ROOT).replaceAll("[^A-Z0-9_]", "_");
   }
 
   private void sanitizeWindowsEnv(Map<String, String> environment, Path pwd,

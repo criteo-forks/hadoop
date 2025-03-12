@@ -88,6 +88,7 @@ import org.apache.hadoop.yarn.api.records.LocalResourceVisibility;
 import org.apache.hadoop.yarn.api.records.NodeId;
 import org.apache.hadoop.yarn.api.records.Priority;
 import org.apache.hadoop.yarn.api.records.Resource;
+import org.apache.hadoop.yarn.api.records.ResourceInformation;
 import org.apache.hadoop.yarn.api.records.Token;
 import org.apache.hadoop.yarn.api.records.URL;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
@@ -775,6 +776,9 @@ public class TestContainerLaunch extends BaseContainerManagerTest {
     when(container.getContainerId()).thenReturn(cId);
     when(container.getLaunchContext()).thenReturn(containerLaunchContext);
     when(container.getLocalizedResources()).thenReturn(null);
+    Resource resource = mock(Resource.class);
+    when(resource.getResources()).thenReturn(new ResourceInformation[0]);
+    when(container.getResource()).thenReturn(resource);
     Dispatcher dispatcher = mock(Dispatcher.class);
     EventHandler<Event> eventHandler = new EventHandler<Event>() {
       public void handle(Event event) {
@@ -937,6 +941,9 @@ public class TestContainerLaunch extends BaseContainerManagerTest {
     when(container.getContainerId()).thenReturn(containerId);
     when(container.getUser()).thenReturn("test");
     when(container.localizationCountersAsString()).thenReturn("");
+    Resource resource = mock(Resource.class);
+    when(resource.getResources()).thenReturn(new ResourceInformation[0]);
+    when(container.getResource()).thenReturn(resource);
     String relativeContainerLogDir = ContainerLaunch.getRelativeContainerLogDir(
         appId.toString(), containerId.toString());
     Path containerLogDir =
@@ -1081,6 +1088,8 @@ public class TestContainerLaunch extends BaseContainerManagerTest {
     userSetEnv.put(Environment.HADOOP_CONF_DIR.name(), userConfDir);
     containerLaunchContext.setEnvironment(userSetEnv);
 
+    Resource containerResource = BuilderUtils.newResource(1024, 1);
+
     File scriptFile = Shell.appendScriptExtension(tmpDir, "scriptFile");
     PrintWriter fileWriter = new PrintWriter(scriptFile);
     File processStartFile =
@@ -1107,6 +1116,10 @@ public class TestContainerLaunch extends BaseContainerManagerTest {
       fileWriter.println("@echo " + Environment.HOME.$() + ">> "
           + processStartFile);
       fileWriter.println("@echo " + Environment.HADOOP_CONF_DIR.$() + ">> "
+          + processStartFile);
+      fileWriter.println("@echo %CONTAINER_RESOURCE_MEMORY_MB%>> "
+          + processStartFile);
+      fileWriter.println("@echo %CONTAINER_RESOURCE_VCORES%>> "
           + processStartFile);
       for (String serviceName : containerManager.getAuxServiceMetaData()
           .keySet()) {
@@ -1140,6 +1153,10 @@ public class TestContainerLaunch extends BaseContainerManagerTest {
           + processStartFile);
       fileWriter.write("\necho $" + Environment.HADOOP_CONF_DIR.name() + " >> "
           + processStartFile);
+      fileWriter.println("\necho $CONTAINER_RESOURCE_MEMORY_MB >> "
+              + processStartFile);
+      fileWriter.println("\necho $CONTAINER_RESOURCE_VCORES >> "
+              + processStartFile);
       for (String serviceName : containerManager.getAuxServiceMetaData()
           .keySet()) {
         fileWriter.write("\necho $" + AuxiliaryServiceHelper.NM_AUX_SERVICE
@@ -1174,7 +1191,7 @@ public class TestContainerLaunch extends BaseContainerManagerTest {
     containerLaunchContext.setCommands(commands);
     StartContainerRequest scRequest =
         StartContainerRequest.newInstance(containerLaunchContext,
-          createContainerToken(cId, Priority.newInstance(0), 0));
+          createContainerToken(cId, containerResource, Priority.newInstance(0), 0));
     List<StartContainerRequest> list = new ArrayList<StartContainerRequest>();
     list.add(scRequest);
     StartContainersRequest allRequests =
@@ -1230,6 +1247,8 @@ public class TestContainerLaunch extends BaseContainerManagerTest {
               YarnConfiguration.DEFAULT_NM_USER_HOME_DIR),
         reader.readLine());
     Assert.assertEquals(userConfDir, reader.readLine());
+    Assert.assertEquals("1024", reader.readLine());
+    Assert.assertEquals("1", reader.readLine());
     for (String serviceName : containerManager.getAuxServiceMetaData().keySet()) {
       Assert.assertEquals(
           containerManager.getAuxServiceMetaData().get(serviceName),
@@ -1470,6 +1489,9 @@ public class TestContainerLaunch extends BaseContainerManagerTest {
     when(clc.getCommands()).thenReturn(Collections.<String>emptyList());
     when(container.getLaunchContext()).thenReturn(clc);
     when(container.getLocalizedResources()).thenReturn(null);
+    Resource resource = mock(Resource.class);
+    when(resource.getResources()).thenReturn(new ResourceInformation[0]);
+    when(container.getResource()).thenReturn(resource);
     Dispatcher dispatcher = mock(Dispatcher.class);
     EventHandler<Event> eventHandler = new EventHandler<Event>() {
       @Override
@@ -1488,7 +1510,12 @@ public class TestContainerLaunch extends BaseContainerManagerTest {
 
   protected Token createContainerToken(ContainerId cId, Priority priority,
       long createTime) throws InvalidToken {
-    Resource r = Resources.createResource(1024);
+    return createContainerToken(cId, Resources.createResource(1024), priority,
+        createTime);
+  }
+
+  protected Token createContainerToken(ContainerId cId, Resource r, Priority priority,
+                                       long createTime) throws InvalidToken {
     ContainerTokenIdentifier containerTokenIdentifier =
         new ContainerTokenIdentifier(cId, context.getNodeId().toString(), user,
           r, System.currentTimeMillis() + 10000L, 123, DUMMY_RM_IDENTIFIER,
@@ -1923,6 +1950,9 @@ public class TestContainerLaunch extends BaseContainerManagerTest {
     when(container.getContainerId()).thenReturn(id);
     when(container.getUser()).thenReturn("user");
     when(container.localizationCountersAsString()).thenReturn("1,2,3,4,5");
+    Resource resource = mock(Resource.class);
+    when(resource.getResources()).thenReturn(new ResourceInformation[0]);
+    when(container.getResource()).thenReturn(resource);
     ContainerLaunchContext clc = mock(ContainerLaunchContext.class);
     when(clc.getCommands()).thenReturn(Lists.newArrayList());
     when(container.getLaunchContext()).thenReturn(clc);
@@ -2384,6 +2414,9 @@ public class TestContainerLaunch extends BaseContainerManagerTest {
     when(container.getContainerId()).thenReturn(containerId);
     when(container.getUser()).thenReturn("test");
     when(container.localizationCountersAsString()).thenReturn("1,2,3,4,5");
+    Resource resource = mock(Resource.class);
+    when(resource.getResources()).thenReturn(new ResourceInformation[0]);
+    when(container.getResource()).thenReturn(resource);
 
     when(container.getLocalizedResources())
         .thenReturn(Collections.<Path, List<String>> emptyMap());
@@ -2488,6 +2521,10 @@ public class TestContainerLaunch extends BaseContainerManagerTest {
     when(id.toString()).thenReturn("1");
     when(container.getContainerId()).thenReturn(id);
     when(container.getUser()).thenReturn("user");
+    when(container.localizationCountersAsString()).thenReturn("1,2,3,4,5");
+    Resource resource = mock(Resource.class);
+    when(resource.getResources()).thenReturn(new ResourceInformation[0]);
+    when(container.getResource()).thenReturn(resource);
     ContainerLaunchContext clc = mock(ContainerLaunchContext.class);
     when(clc.getCommands()).thenReturn(Lists.newArrayList());
     when(container.getLaunchContext()).thenReturn(clc);
@@ -2627,6 +2664,9 @@ public class TestContainerLaunch extends BaseContainerManagerTest {
     Credentials credentials = mock(Credentials.class);
     when(container.getCredentials()).thenReturn(credentials);
     when(container.localizationCountersAsString()).thenReturn("1,2,3,4,5");
+    Resource resource = mock(Resource.class);
+    when(resource.getResources()).thenReturn(new ResourceInformation[0]);
+    when(container.getResource()).thenReturn(resource);
 
     // Define user environment variables.
     Map<String, String> userSetEnv = new HashMap<String, String>();
