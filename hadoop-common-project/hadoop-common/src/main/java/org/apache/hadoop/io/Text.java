@@ -571,6 +571,14 @@ public class Text extends BinaryComparable
     return decode(bytes);
   }
 
+  public static String readString(byte firstByte, DataInput in, int maxLength)
+          throws IOException {
+    int length = WritableUtils.readVIntInRange(firstByte, in, 0, maxLength);
+    byte [] bytes = new byte[length];
+    in.readFully(bytes, 0, length);
+    return decode(bytes);
+  }
+
   /**
    * Write a UTF8 encoded string to out.
    *
