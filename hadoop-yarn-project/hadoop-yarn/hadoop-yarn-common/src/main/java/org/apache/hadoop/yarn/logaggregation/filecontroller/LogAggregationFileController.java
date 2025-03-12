@@ -510,8 +510,14 @@ public abstract class LogAggregationFileController {
 
             // Only creating directories if they are missing to avoid
             // unnecessary load on the filesystem from all of the nodes
-            Path appDir = LogAggregationUtils.getRemoteAppLogDir(
-                remoteRootLogDir, appId, user, remoteRootLogDirSuffix);
+            Path appDir;
+            if (LogAggregationUtils.isOlderPathEnabled(conf)) {
+              appDir = LogAggregationUtils.getOlderRemoteAppLogDir(
+                      appId, user, remoteRootLogDir, remoteRootLogDirSuffix);
+            } else {
+              appDir = LogAggregationUtils.getRemoteAppLogDir(
+                      remoteRootLogDir, appId, user, remoteRootLogDirSuffix);
+            }
             Path curDir = appDir.makeQualified(remoteFS.getUri(),
                 remoteFS.getWorkingDirectory());
             Path rootLogDir = remoteRootLogDir.makeQualified(remoteFS.getUri(),
@@ -595,6 +601,13 @@ public abstract class LogAggregationFileController {
     return LogAggregationUtils.getRemoteNodeLogFileForApp(
         getRemoteRootLogDir(), appId, user, nodeId,
         getRemoteRootLogDirSuffix());
+  }
+
+  public Path getOlderRemoteNodeLogFileForApp(ApplicationId appId, String user,
+                                         NodeId nodeId) {
+    return LogAggregationUtils.getOlderRemoteNodeLogFileForApp(
+            getRemoteRootLogDir(), appId, user, nodeId,
+            getRemoteRootLogDirSuffix());
   }
 
   /**
