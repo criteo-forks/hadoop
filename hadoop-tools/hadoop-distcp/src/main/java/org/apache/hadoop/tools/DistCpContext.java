@@ -40,9 +40,6 @@ public class DistCpContext {
   /** The source paths can be set at runtime via snapshots. */
   private List<Path> sourcePaths;
 
-  /** This is a derived field, it's initialized in the beginning of distcp. */
-  private boolean targetPathExists = true;
-
   /** Indicate that raw.* xattrs should be preserved if true. */
   private boolean preserveRawXattrs = false;
 
@@ -192,11 +189,11 @@ public class DistCpContext {
   }
 
   public void setTargetPathExists(boolean targetPathExists) {
-    this.targetPathExists = targetPathExists;
+    options.setTargetPathExists(targetPathExists);
   }
 
   public boolean isTargetPathExists() {
-    return targetPathExists;
+    return options.isTargetPathExists();
   }
 
   public void appendToConf(Configuration conf) {
@@ -207,7 +204,7 @@ public class DistCpContext {
   public String toString() {
     return options.toString() +
         ", sourcePaths=" + sourcePaths +
-        ", targetPathExists=" + targetPathExists +
+        ", targetPathExists=" + isTargetPathExists() +
         ", preserveRawXattrs=" + preserveRawXattrs;
   }
 
