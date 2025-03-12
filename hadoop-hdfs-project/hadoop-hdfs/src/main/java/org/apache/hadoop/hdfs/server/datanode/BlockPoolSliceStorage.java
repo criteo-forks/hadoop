@@ -68,7 +68,7 @@ import org.apache.hadoop.thirdparty.com.google.common.collect.Lists;
  */
 @InterfaceAudience.Private
 public class BlockPoolSliceStorage extends Storage {
-  static final String TRASH_ROOT_DIR = "trash";
+  public static final String TRASH_ROOT_DIR = "trash";
 
   /**
    * A marker file that is created on each root directory if a rolling upgrade
