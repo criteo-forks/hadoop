@@ -729,6 +729,9 @@ public class Client implements AutoCloseable {
             // and should not print a warning log.
             if (ex instanceof InterruptedIOException) {
               LOG.debug("Exception encountered while connecting to the server {}", remoteId, ex);
+            } else if (ex instanceof StandbyException) {
+              LOG.debug("Exception encountered while connecting to the server",
+                    ex);
             } else {
               LOG.warn("Exception encountered while connecting to the server {}", remoteId, ex);
             }
