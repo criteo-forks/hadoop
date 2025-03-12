@@ -32,7 +32,10 @@ import org.apache.hadoop.classification.InterfaceAudience;
 import org.apache.hadoop.classification.InterfaceStability;
 import org.apache.hadoop.fs.permission.FsPermission;
 import org.apache.hadoop.fs.protocolPB.PBHelper;
+import org.apache.hadoop.io.Text;
 import org.apache.hadoop.io.Writable;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 
 /** Interface that represents the client side information for a file.
  */
@@ -40,6 +43,8 @@ import org.apache.hadoop.io.Writable;
 @InterfaceStability.Stable
 public class FileStatus implements Writable, Comparable<Object>,
     Serializable, ObjectInputValidation {
+
+  private static final Logger LOGGER = LoggerFactory.getLogger(FileStatus.class);
 
   private static final long serialVersionUID = 0x13caeae8;
 
@@ -494,29 +499,71 @@ public class FileStatus implements Writable, Comparable<Object>,
   @Override
   @Deprecated
   public void readFields(DataInput in) throws IOException {
-    int size = in.readInt();
-    if (size < 0) {
-      throw new IOException("Can't read FileStatusProto with negative " +
-          "size of " + size);
+    // Detect if hadoop 2 or hadoop 3 serialization:
+    //
+    // This assumes that hadoop3 protobuf serialization is smaller than 16Mo for a FileStatus, which make sense
+    // indeed for more than 16Mo, the int representing the protobuf byte size would be higher than 1 << 24
+    // we will use the fact that the way string are stored in hadoop2 (Text.writeString) touches the first byte with a value
+    // different from 0:
+    //   - either a negative value, to store string with more than 127 characters
+    //     (refer to WritableUtils class for VInt serialization details)
+    //   - either a positive value for a string of 1 character
+    //
+    // For details, please check 'variable int' serialization online
+    //
+    // The possibility of having the first byte equal to 0 for Text.writeString is when the string is of size 0,
+    // which cannot happen for FileStatus as the first string is the path of the file, which is not empty
+    byte firstByte = in.readByte();
+    if(firstByte != 0) {
+      //case hadoop 2
+      LOGGER.info("Detected hadoop 2 serialization, based on first byte non 0");
+      String strPath = Text.readString(firstByte, in, Text.DEFAULT_MAX_LEN);
+      this.path = new Path(strPath);
+      this.length = in.readLong();
+      this.isdir = in.readBoolean();
+      this.block_replication = in.readShort();
+      blocksize = in.readLong();
+      modification_time = in.readLong();
+      access_time = in.readLong();
+      permission.readFields(in);
+      owner = Text.readString(in, Text.DEFAULT_MAX_LEN);
+      group = Text.readString(in, Text.DEFAULT_MAX_LEN);
+      if (in.readBoolean()) {
+          this.symlink = new Path(Text.readString(in, Text.DEFAULT_MAX_LEN));
+      } else {
+          this.symlink = null;
+      }
+    } else {
+      //case hadoop 3
+      byte secondByte = in.readByte();
+      byte thirdByte = in.readByte();
+      byte fourthByte = in.readByte();
+      // reconstruct the int. We have to pay attention to java conversion of byte to int
+      // which explains the necessity to add a one byte mask
+      int size = ((secondByte & 0xFF) << 16) + ((thirdByte  & 0xFF) << 8) + (fourthByte & 0xFF);
+      if (size < 0) {
+        throw new IOException("Can't read FileStatusProto with negative " +
+                "size of " + size);
+      }
+      byte[] buf = new byte[size];
+      in.readFully(buf);
+      FileStatusProto proto = FileStatusProto.parseFrom(buf);
+      FileStatus other = PBHelper.convert(proto);
+      isdir = other.isDirectory();
+      length = other.getLen();
+      block_replication = other.getReplication();
+      blocksize = other.getBlockSize();
+      modification_time = other.getModificationTime();
+      access_time = other.getAccessTime();
+      setPermission(other.getPermission());
+      setOwner(other.getOwner());
+      setGroup(other.getGroup());
+      setSymlink((other.isSymlink() ? other.getSymlink() : null));
+      setPath(other.getPath());
+      attr = attributes(other.hasAcl(), other.isEncrypted(),
+          other.isErasureCoded(), other.isSnapshotEnabled());
+      assert !(isDirectory() && isSymlink()) : "A directory cannot be a symlink";
     }
-    byte[] buf = new byte[size];
-    in.readFully(buf);
-    FileStatusProto proto = FileStatusProto.parseFrom(buf);
-    FileStatus other = PBHelper.convert(proto);
-    isdir = other.isDirectory();
-    length = other.getLen();
-    block_replication = other.getReplication();
-    blocksize = other.getBlockSize();
-    modification_time = other.getModificationTime();
-    access_time = other.getAccessTime();
-    setPermission(other.getPermission());
-    setOwner(other.getOwner());
-    setGroup(other.getGroup());
-    setSymlink((other.isSymlink() ? other.getSymlink() : null));
-    setPath(other.getPath());
-    attr = attributes(other.hasAcl(), other.isEncrypted(),
-        other.isErasureCoded(), other.isSnapshotEnabled());
-    assert !(isDirectory() && isSymlink()) : "A directory cannot be a symlink";
   }
 
   /**
