@@ -204,7 +204,7 @@ public class TestFsDatasetCache {
           fsImage.getLastAppliedOrWrittenTxId());
       HeartbeatResponse response =
           new HeartbeatResponse(cmds, ha, null,
-              ThreadLocalRandom.current().nextLong() | 1L);
+              ThreadLocalRandom.current().nextLong() | 1L, 0);
       doReturn(response).when(spyNN).sendHeartbeat(
           (DatanodeRegistration) any(),
           (StorageReport[]) any(), anyLong(), anyLong(),

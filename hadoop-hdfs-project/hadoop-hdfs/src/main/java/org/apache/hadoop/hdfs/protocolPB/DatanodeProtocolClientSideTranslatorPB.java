@@ -183,7 +183,7 @@ public class DatanodeProtocolClientSideTranslatorPB implements
       rollingUpdateStatus = PBHelperClient.convert(resp.getRollingUpgradeStatus());
     }
     return new HeartbeatResponse(cmds, PBHelper.convert(resp.getHaStatus()),
-        rollingUpdateStatus, resp.getFullBlockReportLeaseId());
+        rollingUpdateStatus, resp.getFullBlockReportLeaseId(), resp.getGenerationStampV1Limit());
   }
 
   @Override

@@ -33,8 +33,8 @@ public class RollingUpgradeInfo extends RollingUpgradeStatus {
   private boolean createdRollbackImages;
 
   public RollingUpgradeInfo(String blockPoolId, boolean createdRollbackImages,
-      long startTime, long finalizeTime) {
-    super(blockPoolId, finalizeTime != 0);
+      long startTime, long finalizeTime, long lastAllocatedContiguousBlockId, long lastAllocatedStrippedBlockId) {
+    super(blockPoolId, finalizeTime != 0, lastAllocatedContiguousBlockId, lastAllocatedStrippedBlockId);
     this.createdRollbackImages = createdRollbackImages;
     this.startTime = startTime;
     this.finalizeTime = finalizeTime;

@@ -662,7 +662,7 @@ class BPServiceActor implements Runnable {
           " in HeartbeatResponse. Expected " +
           bpos.getBlockPoolId());
     } else {
-      bpos.signalRollingUpgrade(rollingUpgradeStatus);
+      bpos.signalRollingUpgrade(rollingUpgradeStatus, resp.getGenerationStampV1Limit());
     }
   }
 

@@ -651,6 +651,8 @@ message SnapshotInfoProto {
 message RollingUpgradeStatusProto {
   required string blockPoolId = 1;
   optional bool finalized = 2 [default = false];
+  optional uint64 lastAllocatedContiguousBlockId = 999;
+  optional uint64 lastAllocatedStripedBlockId = 1000;
 }
 
 

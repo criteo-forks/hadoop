@@ -891,7 +891,7 @@ public class TestAuditLoggerWithCommands {
     when(call.getRemoteUser()).thenReturn(
         UserGroupInformation.createRemoteUser(System.getProperty("user.name")));
     Server.getCurCall().set(call);
-    fsNamesystem.setRollingUpgradeInfo(false, System.currentTimeMillis());
+    fsNamesystem.setRollingUpgradeInfo(false, System.currentTimeMillis(), 0, 0);
     try {
       fsNamesystem.finalizeRollingUpgrade();
       verifyAuditLogs(auditLogString);
@@ -921,7 +921,7 @@ public class TestAuditLoggerWithCommands {
     when(call.getRemoteUser()).thenReturn(
         UserGroupInformation.createRemoteUser(System.getProperty("user.name")));
     Server.getCurCall().set(call);
-    fsNamesystem.setRollingUpgradeInfo(false, System.currentTimeMillis());
+    fsNamesystem.setRollingUpgradeInfo(false, System.currentTimeMillis(), 0, 0);
     try {
       fsNamesystem.queryRollingUpgrade();
       verifyAuditLogs(auditLogString);
