@@ -68,10 +68,13 @@ public class CGroupsResourceCalculator extends ResourceCalculatorProcessTree {
   private static final String PROCFS = "/proc";
   static final String CGROUP = "cgroup";
   static final String CPU_STAT = "cpuacct.stat";
-  static final String MEM_STAT = "memory.usage_in_bytes";
+  static final String MEM_STAT = "memory.stat";
+  static final String KMEM_STAT = "memory.kmem.usage_in_bytes";
   static final String MEMSW_STAT = "memory.memsw.usage_in_bytes";
   private static final String USER = "user ";
   private static final String SYSTEM = "system ";
+  private static final String TOTAL_RSS = "total_rss ";
+  private static final String TOTAL_MAPPED_FILE = "total_mapped_file ";
 
   private static final Pattern CGROUP_FILE_FORMAT = Pattern.compile(
       "^(\\d+):([^:]+):/(.*)$");
@@ -81,6 +84,7 @@ public class CGroupsResourceCalculator extends ResourceCalculatorProcessTree {
   private String pid;
   private File cpuStat;
   private File memStat;
+  private File kmemStat;
   private File memswStat;
 
   private BigInteger processTotalJiffies;
@@ -182,7 +186,7 @@ public class CGroupsResourceCalculator extends ResourceCalculatorProcessTree {
     } catch (YarnException e) {
       LOG.warn("Failed to parse " + pid, e);
     }
-    processPhysicalMemory = getMemorySize(memStat);
+    processPhysicalMemory = getUnreclaimableMemorySize();
     if (memswStat.exists()) {
       processVirtualMemory = getMemorySize(memswStat);
     } else {
@@ -242,6 +246,34 @@ public class CGroupsResourceCalculator extends ResourceCalculatorProcessTree {
       LOG.warn("Failed to parse cgroups " + memswStat, e);
     }
     return UNAVAILABLE;
+  }
+
+  private long getUnreclaimableMemorySize() {
+    long[] mem = new long[1];
+    try {
+      processFile(memStat, (String line) -> {
+        if (line.startsWith(TOTAL_RSS)) {
+          mem[0] += Long.parseLong(line.substring(TOTAL_RSS.length()));
+        }
+        if (line.startsWith(TOTAL_MAPPED_FILE)) {
+          mem[0] += Long.parseLong(line.substring(TOTAL_MAPPED_FILE.length()));
+        }
+        return Result.Continue;
+      });
+    } catch (YarnException e) {
+      LOG.warn("Failed to parse cgroups " + memStat, e);
+      return UNAVAILABLE;
+    }
+    try {
+      processFile(kmemStat, (String line) -> {
+        mem[0] += Long.parseLong(line);
+        return Result.Exit;
+      });
+    } catch (YarnException e) {
+      LOG.warn("Failed to parse cgroups " + kmemStat, e);
+      return UNAVAILABLE;
+    }
+    return mem[0];
   }
 
   private BigInteger readTotalProcessJiffies() throws YarnException {
@@ -349,6 +381,7 @@ public class CGroupsResourceCalculator extends ResourceCalculatorProcessTree {
         getCGroupRelativePath(CGroupsHandler.CGroupController.MEMORY));
     cpuStat = new File(cpuDir, CPU_STAT);
     memStat = new File(memDir, MEM_STAT);
+    kmemStat = new File(memDir, KMEM_STAT);
     memswStat = new File(memDir, MEMSW_STAT);
   }
 
