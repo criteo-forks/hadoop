@@ -3139,7 +3139,7 @@
 
 <property>
   <name>dfs.webhdfs.socket.connect-timeout</name>
-  <value>60s</value>
+  <value>60</value>
   <description>
     Socket timeout for connecting to WebHDFS servers. This prevents a
     WebHDFS client from hanging if the server hostname is
@@ -3153,7 +3153,7 @@
 
 <property>
   <name>dfs.webhdfs.socket.read-timeout</name>
-  <value>60s</value>
+  <value>60</value>
   <description>
     Socket timeout for reading data from WebHDFS servers. This
     prevents a WebHDFS client from hanging if the server stops sending
@@ -3365,7 +3365,7 @@
 
   <property>
     <name>dfs.datanode.processcommands.threshold</name>
-    <value>2s</value>
+    <value>2</value>
     <description>The threshold in milliseconds at which we will log a slow
       command processing in BPServiceActor. By default, this parameter is set
       to 2 seconds.
@@ -6173,7 +6173,7 @@
 
   <property>
     <name>dfs.lock.suppress.warning.interval</name>
-    <value>10s</value>
+    <value>10</value>
     <description>Instrumentation reporting long critical sections will suppress
       consecutive warnings within this interval.</description>
   </property>
@@ -6239,7 +6239,7 @@
 
   <property>
     <name>dfs.qjm.operations.timeout</name>
-    <value>60s</value>
+    <value>60</value>
     <description>
       Common key to set timeout for related operations in
       QuorumJournalManager. This setting supports multiple time unit suffixes
@@ -6405,7 +6405,7 @@
 
   <property>
     <name>dfs.namenode.gc.time.monitor.sleep.interval.ms</name>
-    <value>5s</value>
+    <value>5</value>
     <description>
       Determines the sleep interval in the window. The GcTimeMonitor wakes up in
       the sleep interval periodically to compute the gc time proportion. The
