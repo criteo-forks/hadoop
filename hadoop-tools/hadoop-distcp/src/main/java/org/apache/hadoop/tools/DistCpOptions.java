@@ -162,6 +162,8 @@ public final class DistCpOptions {
 
   private final boolean useIterator;
 
+  private boolean targetPathExists = true;
+
   /**
    * File attributes for preserve.
    *
@@ -794,6 +796,14 @@ public final class DistCpOptions {
       throw new IllegalArgumentException(
               "-diff and -rdiff are mutually exclusive");
     }
+  }
+
+  public void setTargetPathExists(boolean targetPathExists) {
+    this.targetPathExists = targetPathExists;
+  }
+
+  public boolean isTargetPathExists() {
+    return targetPathExists;
   }
 
   /**
