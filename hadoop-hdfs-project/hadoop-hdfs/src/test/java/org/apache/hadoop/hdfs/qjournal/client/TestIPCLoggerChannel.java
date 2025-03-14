@@ -17,8 +17,6 @@
  */
 package org.apache.hadoop.hdfs.qjournal.client;
 
-import static org.junit.Assert.*;
-
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.util.concurrent.ExecutionException;
@@ -27,6 +25,7 @@ import java.util.concurrent.TimeUnit;
 import org.apache.hadoop.metrics2.MetricsSource;
 import org.apache.hadoop.metrics2.MetricsSystem;
 import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
+import org.mockito.AdditionalMatchers;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -37,11 +36,18 @@ import org.apache.hadoop.hdfs.server.namenode.NameNodeLayoutVersion;
 import org.apache.hadoop.hdfs.server.protocol.NamespaceInfo;
 import org.apache.hadoop.test.GenericTestUtils;
 import org.apache.hadoop.test.GenericTestUtils.DelayAnswer;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 import org.mockito.Mockito;
 
 import java.util.function.Supplier;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 
 public class TestIPCLoggerChannel {
   private static final Logger LOG = LoggerFactory.getLogger(
@@ -62,7 +68,7 @@ public class TestIPCLoggerChannel {
   private static final int LIMIT_QUEUE_SIZE_BYTES =
       LIMIT_QUEUE_SIZE_MB * 1024 * 1024;
   
-  @Before
+  @BeforeEach
   public void setupMock() {
     conf.setInt(DFSConfigKeys.DFS_QJOURNAL_QUEUE_SIZE_LIMIT_KEY,
         LIMIT_QUEUE_SIZE_MB);
@@ -83,7 +89,7 @@ public class TestIPCLoggerChannel {
     ch.sendEdits(1, 1, 3, FAKE_DATA).get();
     Mockito.verify(mockProxy).journal(Mockito.<RequestInfo>any(),
         Mockito.eq(1L), Mockito.eq(1L),
-        Mockito.eq(3), Mockito.same(FAKE_DATA));
+        Mockito.eq(3), AdditionalMatchers.aryEq(FAKE_DATA));
   }
 
   
@@ -98,7 +104,7 @@ public class TestIPCLoggerChannel {
     Mockito.doAnswer(delayer).when(mockProxy).journal(
         Mockito.<RequestInfo>any(),
         Mockito.eq(1L), Mockito.eq(1L),
-        Mockito.eq(1), Mockito.same(FAKE_DATA));
+        Mockito.eq(1), AdditionalMatchers.aryEq(FAKE_DATA));
     
     // Queue up the maximum number of calls.
     int numToQueue = LIMIT_QUEUE_SIZE_BYTES / FAKE_DATA.length;
@@ -141,7 +147,7 @@ public class TestIPCLoggerChannel {
       .when(mockProxy).journal(
         Mockito.<RequestInfo>any(),
         Mockito.eq(1L), Mockito.eq(1L),
-        Mockito.eq(1), Mockito.same(FAKE_DATA));
+        Mockito.eq(1), AdditionalMatchers.aryEq(FAKE_DATA));
 
     try {
       ch.sendEdits(1L, 1L, 1, FAKE_DATA).get();
@@ -152,7 +158,7 @@ public class TestIPCLoggerChannel {
     Mockito.verify(mockProxy).journal(
         Mockito.<RequestInfo>any(),
         Mockito.eq(1L), Mockito.eq(1L),
-        Mockito.eq(1), Mockito.same(FAKE_DATA));
+        Mockito.eq(1), AdditionalMatchers.aryEq(FAKE_DATA));
 
     assertTrue(ch.isOutOfSync());
     
@@ -168,7 +174,7 @@ public class TestIPCLoggerChannel {
     Mockito.verify(mockProxy, Mockito.never()).journal(
         Mockito.<RequestInfo>any(),
         Mockito.eq(1L), Mockito.eq(2L),
-        Mockito.eq(1), Mockito.same(FAKE_DATA));
+        Mockito.eq(1), AdditionalMatchers.aryEq(FAKE_DATA));
     // It should have sent a heartbeat instead.
     Mockito.verify(mockProxy).heartbeat(
         Mockito.<RequestInfo>any());
