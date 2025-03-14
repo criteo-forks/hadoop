@@ -37,7 +37,6 @@ import java.net.URISyntaxException;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
 import java.util.concurrent.TimeoutException;
 
 import org.slf4j.Logger;
@@ -1132,10 +1131,14 @@ public class TestQuorumJournalManager {
           String journalId, String nameServiceId, InetSocketAddress addr) {
         AsyncLogger logger = new IPCLoggerChannel(conf, nsInfo, journalId,
             nameServiceId, addr) {
-          protected ExecutorService createSingleThreadExecutor() {
+          @Override
+          protected FifoExecutor createFifoExecutor(boolean mergeEdits) {
             // Don't parallelize calls to the quorum in the tests.
             // This makes the tests more deterministic.
-            return new DirectExecutorService();
+            MergingTaskFifoExecutor fifoMergingTaskExecutor = new MergingTaskFifoExecutor(true, 10000);
+            fifoMergingTaskExecutor.setDaemon(true);
+            fifoMergingTaskExecutor.start();
+            return fifoMergingTaskExecutor;
           }
         };
         

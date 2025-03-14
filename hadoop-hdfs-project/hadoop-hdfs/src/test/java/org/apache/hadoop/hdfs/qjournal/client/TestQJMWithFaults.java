@@ -35,7 +35,6 @@ import java.util.Map;
 import java.util.Random;
 import java.util.SortedSet;
 import java.util.concurrent.Callable;
-import java.util.concurrent.ExecutorService;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -399,8 +398,13 @@ public class TestQJMWithFaults {
     }
 
     @Override
-    protected ExecutorService createSingleThreadExecutor() {
-      return new DirectExecutorService();
+    protected FifoExecutor createFifoExecutor(boolean mergeEdits) {
+      // Don't parallelize calls to the quorum in the tests.
+      // This makes the tests more deterministic.
+      MergingTaskFifoExecutor mergingTaskFifoExecutor = new MergingTaskFifoExecutor(true, 10000);
+      mergingTaskFifoExecutor.setDaemon(true);
+      mergingTaskFifoExecutor.start();
+      return mergingTaskFifoExecutor;
     }
   }
 
