@@ -262,6 +262,13 @@ public class CommonConfigurationKeys extends CommonConfigurationKeysPublic {
       HADOOP_SECURITY_DNS_LOG_SLOW_LOOKUPS_THRESHOLD_MS_DEFAULT = 1000;
 
   /**
+   * Script used to get server principal when _REALM pattern is used
+   * Canonical hostname of the host is passed as $1. The script is expected
+   * to write the realm string to stdout and exit.
+   */
+  public static final String HADOOP_SECURITY_KERBEROS_REALM_SCRIPT_KEY = "hadoop.security.kerberos.realm.script.file.name";
+
+  /**
    * HA health monitor and failover controller.
    */
   public static final String HA_HM_CONNECT_RETRY_INTERVAL_KEY =
