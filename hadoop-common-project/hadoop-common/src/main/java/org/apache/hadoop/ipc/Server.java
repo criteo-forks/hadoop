@@ -634,7 +634,9 @@ public abstract class Server {
     rpcMetrics.addRpcEnQueueTime(enQueueTime);
 
     long queueTime = details.get(Timing.QUEUE, rpcMetrics.getMetricsTimeUnit());
+    long enqueueTime = details.get(Timing.ENQUEUE, rpcMetrics.getMetricsTimeUnit());
     rpcMetrics.addRpcQueueTime(queueTime);
+    rpcMetrics.addRpcEnqueueTime(enqueueTime);
 
     if (call.isResponseDeferred() || connDropped) {
       // call was skipped; don't include it in processing metrics

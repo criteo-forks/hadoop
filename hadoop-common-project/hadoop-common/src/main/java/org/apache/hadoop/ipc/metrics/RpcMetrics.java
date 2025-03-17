@@ -73,6 +73,8 @@ public class RpcMetrics {
           new MutableQuantiles[intervals.length];
       rpcQueueTimeQuantiles =
           new MutableQuantiles[intervals.length];
+      rpcEnqueueTimeQuantiles =
+          new MutableQuantiles[intervals.length];
       rpcLockWaitTimeQuantiles =
           new MutableQuantiles[intervals.length];
       rpcProcessingTimeQuantiles =
@@ -88,6 +90,9 @@ public class RpcMetrics {
             "latency", interval);
         rpcQueueTimeQuantiles[i] = registry.newQuantiles("rpcQueueTime"
             + interval + "s", "rpc queue time in " + metricsTimeUnit, "ops",
+            "latency", interval);
+        rpcEnqueueTimeQuantiles[i] = registry.newQuantiles("rpcEnqueueTime"
+                + interval + "s", "rpc enqueue time in " + metricsTimeUnit , "ops",
             "latency", interval);
         rpcLockWaitTimeQuantiles[i] = registry.newQuantiles(
             "rpcLockWaitTime" + interval + "s",
@@ -123,6 +128,8 @@ public class RpcMetrics {
   MutableQuantiles[] rpcEnQueueTimeQuantiles;
   @Metric("Queue time") MutableRate rpcQueueTime;
   MutableQuantiles[] rpcQueueTimeQuantiles;
+  @Metric("Enqueue time") MutableRate rpcEnqueueTime;
+  MutableQuantiles[] rpcEnqueueTimeQuantiles;
   @Metric("Lock wait time") MutableRate rpcLockWaitTime;
   MutableQuantiles[] rpcLockWaitTimeQuantiles;
   @Metric("Processing time") MutableRate rpcProcessingTime;
@@ -291,6 +298,15 @@ public class RpcMetrics {
     rpcQueueTime.add(qTime);
     if (rpcQuantileEnable) {
       for (MutableQuantiles q : rpcQueueTimeQuantiles) {
+        q.add(qTime);
+      }
+    }
+  }
+
+  public void addRpcEnqueueTime(long qTime) {
+    rpcEnqueueTime.add(qTime);
+    if (rpcQuantileEnable) {
+      for (MutableQuantiles q : rpcEnqueueTimeQuantiles) {
         q.add(qTime);
       }
     }

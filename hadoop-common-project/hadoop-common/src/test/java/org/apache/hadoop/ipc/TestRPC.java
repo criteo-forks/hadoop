@@ -1338,6 +1338,8 @@ public class TestRPC extends TestRpcBase {
           3000, getLongCounter("RpcEnQueueTimeNumOps", rpcMetrics));
       assertEquals("Expected correct rpc queue count",
           3000, getLongCounter("RpcQueueTimeNumOps", rpcMetrics));
+      assertEquals("Expected correct rpc enqueue count",
+          3000, getLongCounter("RpcEnqueueTimeNumOps", rpcMetrics));
       assertEquals("Expected correct rpc processing count",
           3000, getLongCounter("RpcProcessingTimeNumOps", rpcMetrics));
       assertEquals("Expected correct rpc lock wait count",
