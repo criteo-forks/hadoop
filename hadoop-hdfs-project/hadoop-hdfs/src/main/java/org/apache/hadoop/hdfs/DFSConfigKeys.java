@@ -1295,6 +1295,10 @@ public class DFSConfigKeys extends CommonConfigurationKeys {
   public static final boolean
       DFS_NAMENODE_BLOCKPLACEMENTPOLICY_EXCLUDE_SLOW_NODES_ENABLED_DEFAULT =
       false;
+  public static final String DFS_NAMENODE_BLOCKPLACEMENTPOLICY_WITH_PLACEMENT_GROUP_REFRESH_SCOPE_USAGE_INTERVAL =
+          "dfs.namenode.block-placement-policy.with-placement-group.refresh-scope-interval";
+  public static final long DFS_NAMENODE_BLOCKPLACEMENTPOLICY_WITH_PLACEMENT_GROUP_REFRESH_SCOPE_USAGE_INTERVAL_DEFAULT =
+          5 * 1000; //5 sec
 
   public static final String DFS_NAMENODE_BLOCKPLACEMENTPOLICY_MIN_BLOCKS_FOR_WRITE_KEY =
       "dfs.namenode.block-placement.min-blocks-for.write";
