@@ -517,10 +517,16 @@ public class NetworkTopology {
       node = null;
     } else {
       node = getNode(excludedScope);
-      if (!(node instanceof InnerNode)) {
-        numOfDatanodes -= 1;
-      } else {
-        numOfDatanodes -= ((InnerNode)node).getNumOfLeaves();
+      //  Without checking for null, BlockPlacementPolicyRackFaultTolerantWithExcludedScope would fail when
+      //  excluded scope does not exist in the in-memory topology tree
+      //  A count would be wrongly computed and the method chooseRandom would return null making write impossible
+      //  The error would say --> "File ... could only be written to 0 of the 2 minReplication nodes"
+      if (node != null) {
+        if (!(node instanceof InnerNode)) {
+          numOfDatanodes -= 1;
+        } else {
+          numOfDatanodes -= ((InnerNode) node).getNumOfLeaves();
+        }
       }
     }
     if (numOfDatanodes <= 0) {
