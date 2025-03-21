@@ -106,7 +106,7 @@ public class TestTransferRbw {
         final DataNode oldnode = cluster.getDataNodes().get(0);
         // DataXceiverServer#writeThrottler is null if
         // dfs.datanode.data.write.bandwidthPerSec default value is 0.
-        Assert.assertNull(oldnode.xserver.getWriteThrottler());
+        Assert.assertNull(oldnode.xserver.getWriteThrottler(null));
         oldrbw = getRbw(oldnode, bpid);
         LOG.info("oldrbw = " + oldrbw);
         
@@ -119,7 +119,7 @@ public class TestTransferRbw {
         // dfs.datanode.data.write.bandwidthPerSec value if
         // dfs.datanode.data.write.bandwidthPerSec value is not zero.
         Assert.assertEquals(1024 * 1024 * 8,
-            newnode.xserver.getWriteThrottler().getBandwidth());
+            newnode.xserver.getWriteThrottler(null).getBandwidth());
         final DatanodeInfo oldnodeinfo;
         {
           final DatanodeInfo[] datatnodeinfos = cluster.getNameNodeRpc(
