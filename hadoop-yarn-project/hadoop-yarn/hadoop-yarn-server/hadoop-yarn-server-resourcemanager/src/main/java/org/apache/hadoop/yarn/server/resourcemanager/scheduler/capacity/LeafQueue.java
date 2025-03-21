@@ -92,6 +92,8 @@ public class LeafQueue extends AbstractCSQueue {
   
   private float maxAMResourcePerQueuePercent;
 
+  private boolean skipAmLimitForFirstApp;
+
   private volatile int nodeLocalityDelay;
   private volatile int rackLocalityAdditionalDelay;
   private volatile boolean rackLocalityFullReset;
@@ -220,6 +222,8 @@ public class LeafQueue extends AbstractCSQueue {
       maxAMResourcePerQueuePercent =
           conf.getMaximumApplicationMasterResourcePerQueuePercent(
               getQueuePath());
+
+      skipAmLimitForFirstApp = conf.getSkipAmLimitForFirstApp(getQueuePath(), parent);
 
       priorityAcls = conf.getPriorityAcls(getQueuePath(),
           scheduler.getMaxClusterLevelAppPriority());
@@ -841,7 +845,7 @@ public class LeafQueue extends AbstractCSQueue {
         }
 
         if (!resourceCalculator.fitsIn(amIfStarted, amLimit)) {
-          if (getNumActiveApplications() < 1 || (Resources.lessThanOrEqual(
+          if (skipAmLimitForFirstApp && (getNumActiveApplications() < 1 || Resources.lessThanOrEqual(
               resourceCalculator, lastClusterResource,
               queueUsage.getAMUsed(partitionName), Resources.none()))) {
             LOG.warn("maximum-am-resource-percent is insufficient to start a"
@@ -873,7 +877,7 @@ public class LeafQueue extends AbstractCSQueue {
             user.getConsumedAMResources(partitionName));
 
         if (!resourceCalculator.fitsIn(userAmIfStarted, userAMLimit)) {
-          if (getNumActiveApplications() < 1 || (Resources.lessThanOrEqual(
+          if (skipAmLimitForFirstApp && (getNumActiveApplications() < 1 || Resources.lessThanOrEqual(
               resourceCalculator, lastClusterResource,
               queueUsage.getAMUsed(partitionName), Resources.none()))) {
             LOG.warn("maximum-am-resource-percent is insufficient to start a"
