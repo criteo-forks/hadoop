@@ -104,6 +104,7 @@ public class DNConf {
   final boolean overwriteDownstreamDerivedQOP;
   private final boolean pmemCacheRecoveryEnabled;
 
+  final boolean useDatanodeCachingStrategies;
   final long readaheadLength;
   final long heartBeatInterval;
   private final long lifelineIntervalMs;
@@ -297,6 +298,11 @@ public class DNConf {
         DFS_DATANODE_PROCESS_COMMANDS_THRESHOLD_KEY,
         DFS_DATANODE_PROCESS_COMMANDS_THRESHOLD_DEFAULT,
         TimeUnit.MILLISECONDS
+    );
+
+    this.useDatanodeCachingStrategies = getConf().getBoolean(
+        DFSConfigKeys.DFS_DATANODE_CACHE_USE_DATANODE_CACHING_STRATEGIES_KEY,
+        DFSConfigKeys.DFS_DATANODE_CACHE_USE_DATANODE_CACHING_STRATEGIES_DEFAULT
     );
   }
 
