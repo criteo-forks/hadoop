@@ -116,7 +116,7 @@ public class NodesListManager extends CompositeService implements
           YarnConfiguration.DEFAULT_RM_NODES_EXCLUDE_FILE_PATH);
       this.hostsReader =
           createHostsFileReader(this.includesFile, this.excludesFile);
-      setDecommissionedNMs();
+      setDecommissionedNMs(true);
       setIncludedNMs();
       printConfiguredHosts(false);
     } catch (YarnException ex) {
@@ -274,7 +274,7 @@ public class NodesListManager extends CompositeService implements
     }
   }
 
-  private void setDecommissionedNMs() {
+  private void setDecommissionedNMs(boolean isRMRestart) {
     Set<String> excludeList = hostsReader.getExcludedHosts();
     for (final String host : excludeList) {
       NodeId nodeId = createUnknownNodeId(host);
@@ -282,7 +282,18 @@ public class NodesListManager extends CompositeService implements
           rmContext, host, -1, -1, new UnknownNode(host),
           Resource.newInstance(0, 0), "unknown");
       rmContext.getInactiveRMNodes().put(nodeId, rmNode);
-      rmNode.handle(new RMNodeEvent(nodeId, RMNodeEventType.DECOMMISSION));
+      if (isRMRestart) {
+        // Transition directly from NEW to DECOMMISSIONING
+        // the timeout is useless here because such 'unknownId' decommissioning nodes
+        // are not tracked by DecommissionWatcher
+        //   - either node never reconnects and thus EXPIRE event is triggered and the node is LOST
+        //   - either node reconnects and we go through a classic AddNodeTransition
+        //     It is this AddNodeTransition that will set a timeout based on static configuration
+        rmNode.handle(new RMNodeDecommissioningEvent(nodeId, null));
+        rmContext.getResourceTrackerService().getNMLivelinessMonitor().register(nodeId);
+      } else {
+        rmNode.handle(new RMNodeEvent(nodeId, RMNodeEventType.DECOMMISSION));
+      }
     }
   }
 
@@ -572,7 +583,7 @@ public class NodesListManager extends CompositeService implements
           conf.get(YarnConfiguration.DEFAULT_RM_NODES_EXCLUDE_FILE_PATH);
       this.hostsReader =
           createHostsFileReader(this.includesFile, this.excludesFile);
-      setDecommissionedNMs();
+      setDecommissionedNMs(false);
     } catch (IOException ioe2) {
       // Should *never* happen
       this.hostsReader = null;
