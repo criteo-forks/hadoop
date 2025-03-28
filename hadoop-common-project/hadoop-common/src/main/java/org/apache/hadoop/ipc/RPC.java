@@ -1098,7 +1098,7 @@ public class RPC {
    }
    
    // Register  protocol and its impl for rpc calls
-   void registerProtocolAndImpl(RpcKind rpcKind, Class<?> protocolClass, 
+   void registerProtocolAndImpl(RpcKind rpcKind, Class<?> protocolClass,
        Object protocolImpl) {
      String protocolName = RPC.getProtocolName(protocolClass);
      long version;
@@ -1127,6 +1127,20 @@ public class RPC {
         // highest priority.  the scheduler should exempt the user from
         // priority calculations.
         try {
+          // The original code will create UGI from a client string
+          // such as hdfs/_HOST@SOME_REALM that will be tested against auth_to_local rules.
+          // This works when SOME_REALM is static because hdfs/_HOST@SOME_REALM will match an existing rule
+          // and return hdfs.
+          // Because of https://github.com/criteo-forks/hadoop/commit/0765d30626a3615998951a0ebb7896ca784fd658
+          // we allow to define client principal as hdfs/_HOST@_REALM
+          // This no longer match any auth_to_local. We don't have any address to correctly generate
+          // a proper principal that would match an existing rule, instead we split the string
+          // and get the first part, which should be enough.
+          String[] components = SecurityUtil.getComponents(client);
+          if (components != null && components.length == 3) {
+            client = components[0];
+          }
+          LOG.info("Setting scheduling priority for " + client);
           setPriorityLevel(UserGroupInformation.createRemoteUser(client), -1);
         } catch (Exception ex) {
           LOG.warn("Failed to set scheduling priority for " + client, ex);

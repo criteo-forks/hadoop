@@ -246,7 +246,7 @@ public final class SecurityUtil {
     return service + "/" + host + "@" + realm;
   }
 
-  private static String[] getComponents(String principalConfig) {
+  public static String[] getComponents(String principalConfig) {
     if (principalConfig == null)
       return null;
     return principalConfig.split("[/@]");
