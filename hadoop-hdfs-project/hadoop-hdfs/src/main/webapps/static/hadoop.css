@@ -200,7 +200,7 @@ body.env-preprod {
 }
 
 body.env-prod {
-    --env-color: firebrick;
+    --env-color: purple;
     --env-color-active: black;
 }
 
