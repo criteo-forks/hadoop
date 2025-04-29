@@ -194,9 +194,29 @@ div.security {
   background-color: #5FA33E !important;
 }
 
+body.env-preprod {
+    --env-color: darkgreen;
+    --env-color-active: black;
+}
+
+body.env-prod {
+    --env-color: firebrick;
+    --env-color-active: black;
+}
+
+body.env-exp {
+    --env-color: cornflowerblue;
+    --env-color-active: black;
+}
+
+body.env-default {
+    --env-color: #5fa33e;
+    --env-color-active: #446633
+}
+
 header.bs-docs-nav, header.bs-docs-nav .navbar-brand {
   border-radius: 0px;
-  background-color: #5fa33e;
+  background-color: var(--env-color, #5fa33e);
   color: #fff;
 }
 
@@ -206,7 +226,7 @@ header.bs-docs-nav, header.bs-docs-nav .navbar-brand {
 
 #ui-tabs .active a {
   color: #fff;
-  background-color: #446633;
+  background-color: var(--env-color-active, #446633);
 }
 
 #alert-panel {

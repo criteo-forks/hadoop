@@ -30,6 +30,15 @@
 </style>
 </head>
 <body>
+<script>
+  const host = location.hostname;
+  const envClass =
+          host.includes('exp') ? 'env-exp' :
+                  host.includes('preprod') ? 'env-preprod' :
+                          host.includes('prod') ? 'env-prod' : 'env-default';
+
+  document.body.classList.add(envClass);
+</script>
 
 <header class="navbar navbar-inverse bs-docs-nav" role="banner">
 <div class="container">
