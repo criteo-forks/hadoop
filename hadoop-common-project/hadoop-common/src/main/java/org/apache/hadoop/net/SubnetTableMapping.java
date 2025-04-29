@@ -103,7 +103,7 @@ public class SubnetTableMapping extends CachedDNSToSwitchMapping {
           } else {
             if (firstTime) {
               throw new RuntimeException("Subnet table mapping file has a corrupted format: " + line);
-            } else{
+            } else {
               LOG.warn("Subnet table mapping file has a corrupted format: {}", line);
               LOG.warn("Keeping original parsed configuration for safety");
               return;
@@ -124,33 +124,42 @@ public class SubnetTableMapping extends CachedDNSToSwitchMapping {
       synchronized (this) {
         iPv4AddressTrie = tmpIPv4AddressTrie;
         iPv6AddressTrie = tmpIPv6AddressTrie;
+
+        if (LOG.isInfoEnabled()) {
+          LOG.info("Loaded SubnetTableMapping from {}", filename);
+          LOG.info("IPv4 mapping:");
+          LOG.info(iPv4AddressTrie.toString());
+          LOG.info("IPv6 mapping:");
+          LOG.info(iPv6AddressTrie.toString());
+        }
       }
     }
 
     @Override
     public synchronized List<String> resolve(List<String> names) {
       List<String> results = new ArrayList<>(names.size());
-      for(String name : names) {
+      for (String name : names) {
+        boolean added = false;
         IPAddress ipAddress = new IPAddressString(name).getAddress();
         if (ipAddress.isIPv4()) {
-          IPv4Address iPv4Address = ipAddress.toIPv4();
-          IPv4AssociativeTrieNode<String> node = iPv4AddressTrie.longestPrefixMatchNode(iPv4Address);
+          IPv4AssociativeTrieNode<String> node = iPv4AddressTrie.longestPrefixMatchNode(ipAddress.toIPv4());
           if (node != null) {
             results.add(node.getValue());
-          } else {
-            LOG.warn("Found no subnet for {}, setting NetworkTopology.DEFAULT_RACK", name);
-            results.add(NetworkTopology.DEFAULT_RACK);
+            added = true;
           }
         } else if (ipAddress.isIPv6()) {
-          IPv6Address iPv6Address = ipAddress.toIPv6();
-          IPv6AssociativeTrieNode<String> node = iPv6AddressTrie.longestPrefixMatchNode(iPv6Address);
+          IPv6AssociativeTrieNode<String> node = iPv6AddressTrie.longestPrefixMatchNode(ipAddress.toIPv6());
           if (node != null) {
             results.add(node.getValue());
-          } else {
-            LOG.warn("Found no subnet for {}, setting NetworkTopology.DEFAULT_RACK", name);
-            results.add(NetworkTopology.DEFAULT_RACK);
+            added = true;
           }
         }
+
+        if (!added) {
+          LOG.warn("Found no subnet for {}, setting NetworkTopology.DEFAULT_RACK", name);
+          results.add(NetworkTopology.DEFAULT_RACK);
+        }
+
       }
       return results;
     }
