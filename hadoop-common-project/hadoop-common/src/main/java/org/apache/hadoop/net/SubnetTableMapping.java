@@ -5,9 +5,11 @@ import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.NET_TOPOLOGY_SU
 import inet.ipaddr.IPAddress;
 import inet.ipaddr.IPAddressString;
 import inet.ipaddr.ipv4.IPv4Address;
-import inet.ipaddr.ipv4.IPv4AddressTrie;
+import inet.ipaddr.ipv4.IPv4AddressAssociativeTrie;
+import inet.ipaddr.ipv4.IPv4AddressAssociativeTrie.IPv4AssociativeTrieNode;
 import inet.ipaddr.ipv6.IPv6Address;
-import inet.ipaddr.ipv6.IPv6AddressTrie;
+import inet.ipaddr.ipv6.IPv6AddressAssociativeTrie;
+import inet.ipaddr.ipv6.IPv6AddressAssociativeTrie.IPv6AssociativeTrieNode;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.conf.Configured;
@@ -20,9 +22,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 
 public class SubnetTableMapping extends CachedDNSToSwitchMapping {
 
@@ -55,10 +55,8 @@ public class SubnetTableMapping extends CachedDNSToSwitchMapping {
 
   private static class RawSubnetTableMapping extends Configured implements DNSToSwitchMapping {
 
-    private IPv4AddressTrie iPv4AddressTrie;
-    private Map<IPv4Address, String> iPv4AddressToLocation;
-    private IPv6AddressTrie iPv6AddressTrie;
-    private Map<IPv6Address, String> iPv6AddressToLocation;
+    private IPv4AddressAssociativeTrie<String> iPv4AddressTrie;
+    private IPv6AddressAssociativeTrie<String> iPv6AddressTrie;
 
     @Override
     public void setConf(Configuration conf) {
@@ -69,10 +67,8 @@ public class SubnetTableMapping extends CachedDNSToSwitchMapping {
     }
 
     private void load(boolean firstTime) {
-      IPv4AddressTrie tmpIPv4AddressTrie = new IPv4AddressTrie();
-      IPv6AddressTrie tmpIPv6AddressTrie = new IPv6AddressTrie();
-      Map<IPv4Address, String> tmpIPv4AddressToLocation = new HashMap<>();
-      Map<IPv6Address, String> tmpIPv6AddressToLocation = new HashMap<>();
+      IPv4AddressAssociativeTrie<String> tmpIPv4AddressTrie = new IPv4AddressAssociativeTrie<>();
+      IPv6AddressAssociativeTrie<String> tmpIPv6AddressTrie = new IPv6AddressAssociativeTrie<>();
 
       String filename = getConf().get(NET_TOPOLOGY_SUBNET_TABLE_MAPPING_KEY_FILE_KEY, null);
       if (StringUtils.isBlank(filename)) {
@@ -99,12 +95,10 @@ public class SubnetTableMapping extends CachedDNSToSwitchMapping {
             IPAddress ipAddress = new IPAddressString(ip).getAddress();
             if (ipAddress.isIPv4()) {
               IPv4Address iPv4Address = ipAddress.toIPv4();
-              tmpIPv4AddressTrie.add(iPv4Address);
-              tmpIPv4AddressToLocation.put(iPv4Address, location);
+              tmpIPv4AddressTrie.put(iPv4Address, location);
             } else if (ipAddress.isIPv6()) {
               IPv6Address iPv6Address = ipAddress.toIPv6();
-              tmpIPv6AddressTrie.add(iPv6Address);
-              tmpIPv6AddressToLocation.put(iPv6Address, location);
+              tmpIPv6AddressTrie.put(iPv6Address, location);
             }
           } else {
             if (firstTime) {
@@ -129,9 +123,7 @@ public class SubnetTableMapping extends CachedDNSToSwitchMapping {
 
       synchronized (this) {
         iPv4AddressTrie = tmpIPv4AddressTrie;
-        iPv4AddressToLocation = tmpIPv4AddressToLocation;
         iPv6AddressTrie = tmpIPv6AddressTrie;
-        iPv6AddressToLocation = tmpIPv6AddressToLocation;
       }
     }
 
@@ -142,22 +134,20 @@ public class SubnetTableMapping extends CachedDNSToSwitchMapping {
         IPAddress ipAddress = new IPAddressString(name).getAddress();
         if (ipAddress.isIPv4()) {
           IPv4Address iPv4Address = ipAddress.toIPv4();
-          IPv4Address iPv4Subnet = iPv4AddressTrie.longestPrefixMatch(iPv4Address);
-          String result = iPv4AddressToLocation.get(iPv4Subnet);
-          if (result != null) {
-            results.add(result);
+          IPv4AssociativeTrieNode<String> node = iPv4AddressTrie.longestPrefixMatchNode(iPv4Address);
+          if (node != null) {
+            results.add(node.getValue());
           } else {
-            LOG.warn("Found no location for subnet {}, setting NetworkTopology.DEFAULT_RACK", iPv4Subnet);
+            LOG.warn("Found no subnet for {}, setting NetworkTopology.DEFAULT_RACK", name);
             results.add(NetworkTopology.DEFAULT_RACK);
           }
         } else if (ipAddress.isIPv6()) {
           IPv6Address iPv6Address = ipAddress.toIPv6();
-          IPv6Address iPv6Subnet = iPv6AddressTrie.longestPrefixMatch(iPv6Address);
-          String result = iPv6AddressToLocation.get(iPv6Subnet);
-          if (result != null) {
-            results.add(result);
+          IPv6AssociativeTrieNode<String> node = iPv6AddressTrie.longestPrefixMatchNode(iPv6Address);
+          if (node != null) {
+            results.add(node.getValue());
           } else {
-            LOG.warn("Found no location for subnet {}, setting NetworkTopology.DEFAULT_RACK", iPv6Subnet);
+            LOG.warn("Found no subnet for {}, setting NetworkTopology.DEFAULT_RACK", name);
             results.add(NetworkTopology.DEFAULT_RACK);
           }
         }
