@@ -39,6 +39,12 @@
 
   <dependencies>
     <dependency>
+      <groupId>com.github.seancfoley</groupId>
+      <artifactId>ipaddress</artifactId>
+      <version>5.5.1</version>
+      <scope>compile</scope>
+    </dependency>
+    <dependency>
       <groupId>org.apache.hadoop.thirdparty</groupId>
       <artifactId>hadoop-shaded-protobuf_3_25</artifactId>
     </dependency>
