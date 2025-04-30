@@ -394,7 +394,10 @@
                         <exclude>**/pom.xml</exclude>
                       </excludes>
                     </relocation>
-    -->
+    -->             <relocation>
+                      <pattern>inet/</pattern>
+                      <shadedPattern>${shaded.dependency.prefix}.inet.</shadedPattern>
+                    </relocation>
                   </relocations>
                   <transformers>
                     <!-- Needed until MSHADE-182 -->

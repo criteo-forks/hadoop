@@ -134,6 +134,9 @@ public class CommonConfigurationKeysPublic {
   public static final String NET_DEPENDENCY_SCRIPT_FILE_NAME_KEY = 
     "net.topology.dependency.script.file.name";
 
+  public static final String NET_TOPOLOGY_SUBNET_TABLE_MAPPING_KEY_FILE_KEY =
+          "net.topology.subnet.file.name";
+
   /**
    * @see
    * <a href="{@docRoot}/../hadoop-project-dist/hadoop-common/core-default.xml">
