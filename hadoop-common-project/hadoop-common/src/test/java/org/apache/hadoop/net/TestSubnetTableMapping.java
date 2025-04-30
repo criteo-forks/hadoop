@@ -3,6 +3,7 @@ package org.apache.hadoop.net;
 import static org.apache.hadoop.fs.CommonConfigurationKeysPublic.NET_TOPOLOGY_SUBNET_TABLE_MAPPING_KEY_FILE_KEY;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.fail;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.thirdparty.com.google.common.base.Charsets;
@@ -134,5 +135,34 @@ public class TestSubnetTableMapping {
     assertEquals(1, results.size());
     assertEquals("/rack1", results.get(0));
   }
+
+  @Test
+  public void testInvalidLocationFormat() throws IOException {
+    File mapFile = File.createTempFile(getClass().getSimpleName() +
+            ".testResolve", ".txt");
+    mapFile.deleteOnExit();
+
+    testInvalidLocationFormat(mapFile, "root/fr4");
+    testInvalidLocationFormat(mapFile, "/root//fr4");
+    testInvalidLocationFormat(mapFile, "/root/");
+    testInvalidLocationFormat(mapFile, "/root/fr4/");
+    testInvalidLocationFormat(mapFile, "/root/fr4/ ");
+    testInvalidLocationFormat(mapFile, "/root/fr4/!rack");
+  }
+
+  private void testInvalidLocationFormat(File mapFile, String location) throws IOException {
+    Files.asCharSink(mapFile, Charsets.UTF_8).write(
+            "10.180.246.0/25=" + location + "\n"
+    );
+
+    try {
+      SubnetTableMapping mapping = new SubnetTableMapping();
+      Configuration conf = new Configuration();
+      conf.set(NET_TOPOLOGY_SUBNET_TABLE_MAPPING_KEY_FILE_KEY, mapFile.getCanonicalPath());
+      mapping.setConf(conf);
+      fail("Expected to fail on bad location format: " + location);
+    } catch (Exception e) {}
+  }
+
 
 }

@@ -23,6 +23,7 @@ import java.nio.file.Files;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.regex.Pattern;
 
 public class SubnetTableMapping extends CachedDNSToSwitchMapping {
 
@@ -55,6 +56,8 @@ public class SubnetTableMapping extends CachedDNSToSwitchMapping {
 
   private static class RawSubnetTableMapping extends Configured implements DNSToSwitchMapping {
 
+    private static final Pattern LOCATION_PATTERN = Pattern.compile("^/([a-zA-Z0-9.]+)(/[a-zA-Z0-9.]+)*$");
+
     private IPv4AddressAssociativeTrie<String> iPv4AddressTrie;
     private IPv6AddressAssociativeTrie<String> iPv6AddressTrie;
 
@@ -64,6 +67,10 @@ public class SubnetTableMapping extends CachedDNSToSwitchMapping {
       if (conf != null) {
         load(true);
       }
+    }
+
+    private boolean isValidLocation(String path) {
+      return LOCATION_PATTERN.matcher(path).matches();
     }
 
     private void load(boolean firstTime) {
@@ -92,13 +99,24 @@ public class SubnetTableMapping extends CachedDNSToSwitchMapping {
           if (columns.length == 2) {
             String ip = columns[0];
             String location = columns[1];
-            IPAddress ipAddress = new IPAddressString(ip).getAddress();
-            if (ipAddress.isIPv4()) {
-              IPv4Address iPv4Address = ipAddress.toIPv4();
-              tmpIPv4AddressTrie.put(iPv4Address, location);
-            } else if (ipAddress.isIPv6()) {
-              IPv6Address iPv6Address = ipAddress.toIPv6();
-              tmpIPv6AddressTrie.put(iPv6Address, location);
+            if (isValidLocation(location)) {
+              IPAddress ipAddress = new IPAddressString(ip).getAddress();
+              if (ipAddress.isIPv4()) {
+                IPv4Address iPv4Address = ipAddress.toIPv4();
+                tmpIPv4AddressTrie.put(iPv4Address, location);
+              } else if (ipAddress.isIPv6()) {
+                IPv6Address iPv6Address = ipAddress.toIPv6();
+                tmpIPv6AddressTrie.put(iPv6Address, location);
+              }
+            } else {
+              if (firstTime) {
+                throw new RuntimeException("Subnet table mapping file has a corrupted format: " +
+                        "Invalid location: " + location + "Expected pattern: " + LOCATION_PATTERN.pattern());
+              } else {
+                LOG.warn("Subnet table mapping file has a corrupted format: " +
+                        "Invalid location: {} Expected pattern: {}", location, LOCATION_PATTERN.pattern());
+                LOG.warn("Keeping original parsed configuration for safety");
+              }
             }
           } else {
             if (firstTime) {
