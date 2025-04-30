@@ -28,18 +28,36 @@
     width: 30%;
 }
 </style>
+<script>
+  document.addEventListener('DOMContentLoaded', function () {
+    const host = location.hostname;
+    let envLabel = '';
+    let envClass = 'env-default';
+
+    if (host.includes('exp')) {
+      envLabel = ' - EXP';
+      envClass = 'env-exp';
+    } else if (host.includes('preprod')) {
+      envLabel = ' - PREPROD';
+      envClass = 'env-preprod';
+    } else if (host.includes('prod')) {
+      envLabel = ' - PROD';
+      envClass = 'env-prod';
+    } else {
+      envLabel = '';
+      envClass = 'env-default';
+    }
+
+    document.body.classList.add(envClass);
+
+    const brandEl = document.querySelector('.navbar-brand');
+    if (brandEl) {
+      brandEl.textContent = `Hadoop${envLabel}`;
+    }
+  });
+</script>
 </head>
 <body>
-<script>
-  const host = location.hostname;
-  const envClass =
-          host.includes('exp') ? 'env-exp' :
-                  host.includes('preprod') ? 'env-preprod' :
-                          host.includes('prod') ? 'env-prod' : 'env-default';
-
-  document.body.classList.add(envClass);
-</script>
-
 <header class="navbar navbar-inverse bs-docs-nav" role="banner">
 <div class="container">
   <div class="navbar-header">
