@@ -253,6 +253,9 @@ public class DockerLinuxContainerRuntime extends OCIContainerRuntime {
   @InterfaceAudience.Private
   public static final String ENV_DOCKER_CONTAINER_DOCKER_SERVICE_MODE =
       "YARN_CONTAINER_RUNTIME_DOCKER_SERVICE_MODE";
+  @InterfaceAudience.Private
+  public static final String ENV_DOCKER_MOUNT_TMP =
+      "YARN_CONTAINER_RUNTIME_DOCKER_MOUNT_TMP";
 
   @InterfaceAudience.Private
   public final static String ENV_OCI_CONTAINER_PID_NAMESPACE =
@@ -768,6 +771,13 @@ public class DockerLinuxContainerRuntime extends OCIContainerRuntime {
             "Unable to parse some mounts in user supplied mount list: "
                 + environment.get(ENV_DOCKER_CONTAINER_MOUNTS));
       }
+    }
+
+    if (environment.containsKey(ENV_DOCKER_MOUNT_TMP)) {
+      runCommand.addReadWriteMountLocation(containerWorkDir.toString() +
+              "/private_slash_tmp", "/tmp");
+      runCommand.addReadWriteMountLocation(containerWorkDir.toString() +
+              "/private_var_slash_tmp", "/var/tmp");
     }
 
     if(defaultROMounts != null && !defaultROMounts.isEmpty()) {
