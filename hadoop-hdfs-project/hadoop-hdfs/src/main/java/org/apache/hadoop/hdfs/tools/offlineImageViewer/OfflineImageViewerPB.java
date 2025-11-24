@@ -201,6 +201,11 @@ public class OfflineImageViewerPB {
             .visit(r);
         }
         break;
+        case "DELEGATIONTOKENS":
+          try (RandomAccessFile r = new RandomAccessFile(inputFile, "r")) {
+            new DelegationTokenStatisticsProcessor(conf, out).visit(r);
+          }
+          break;
       case "XML":
         try (RandomAccessFile r = new RandomAccessFile(inputFile, "r")) {
           new PBImageXmlWriter(conf, out).visit(r);
