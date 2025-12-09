@@ -238,7 +238,7 @@
     <woodstox.version>5.4.0</woodstox.version>
     <nimbus-jose-jwt.version>10.4</nimbus-jose-jwt.version>
     <jcip-annotations.version>1.0-1</jcip-annotations.version>
-    <nodejs.version>v14.0.0</nodejs.version>
+    <nodejs.version>v18.0.0</nodejs.version>
     <yarnpkg.version>v1.22.5</yarnpkg.version>
     <apache-ant.version>1.10.13</apache-ant.version>
     <jmh.version>1.20</jmh.version>
