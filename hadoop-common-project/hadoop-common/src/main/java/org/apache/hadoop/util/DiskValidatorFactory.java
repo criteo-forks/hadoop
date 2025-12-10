@@ -79,8 +79,8 @@ public final class DiskValidatorFactory {
       clazz = BasicDiskValidator.class;
     } else if (diskValidator.equalsIgnoreCase(ReadWriteDiskValidator.NAME)) {
       clazz = ReadWriteDiskValidator.class;
-    } else if (diskValidator.equalsIgnoreCase(BasicAndReadWriteDiskValidator.NAME)) {
-      clazz = BasicAndReadWriteDiskValidator.class;
+    } else if (diskValidator.equalsIgnoreCase(CriteoReadWriteDiskValidator.NAME)) {
+      clazz = CriteoReadWriteDiskValidator.class;
     } else {
       try {
         clazz = Class.forName(diskValidator);
