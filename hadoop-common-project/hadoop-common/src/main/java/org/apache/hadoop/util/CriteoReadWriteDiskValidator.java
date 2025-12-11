@@ -37,6 +37,37 @@ import java.util.concurrent.TimeUnit;
  * Issues raised:
  *   - https://issues.apache.org/jira/browse/YARN-11906
  *   - https://issues.apache.org/jira/browse/YARN-11908
+ *
+ * Handling thread interruption is critical here. In at least one real scenario,
+ * the thread invoking this validator may already be interrupted:
+ *
+ *   • During NodeManager restart, the ResourceLocalizer thread is often the first
+ *     to call LocalDirsHandler.
+ *
+ *   • LocalDirsHandler builds a LocalDirsHandler.Context, which invokes this
+ *     DiskValidator for every YARN local directory.
+ *
+ *   • The ResourceLocalizer thread may be interrupted as part of Hadoop’s normal
+ *     cooperative shutdown mechanism (e.g., when a resource localization failure
+ *     occurs, such as a missing container dependency).
+ *
+ *   • If the thread is interrupted while this validator performs I/O,
+ *     java.nio.channels operations will fail with ClosedByInterruptException.
+ *
+ *   • If such an interruption happens while the LocalDirsHandler.Context is being
+ *     built for the first time, the context may end up with no valid disks.
+ *     This is problematic because:
+ *
+ *         – The context is initialized from an initial list of “good” directories.
+ *         – It is recomputed only if that list changes — which is unlikely (happens only on real disk failure).
+ *
+ *   • As a result, even when the disks themselves are perfectly healthy, all
+ *     subsequent container scheduling attempts will see an empty context and
+ *     fail with: “No space available in any of the local directories.”
+ *
+ * To avoid this incorrect state, interruptions must be neutralized during the
+ * validation process and restored afterward.
+ *
  */
 public class CriteoReadWriteDiskValidator implements DiskValidator {
 
@@ -45,8 +76,13 @@ public class CriteoReadWriteDiskValidator implements DiskValidator {
 
   @Override
   public void checkStatus(File dir) throws DiskErrorException {
+
+    // Get and clear the interruption state
+    boolean interrupted = Thread.interrupted();
+
     Path tmpFile = null;
     try {
+
       // check the directory presence and permission.
       DiskChecker.checkDir(dir);
 
@@ -75,6 +111,10 @@ public class CriteoReadWriteDiskValidator implements DiskValidator {
         } catch (IOException e) {
           throw new DiskErrorException("File deletion failed!", e);
         }
+      }
+      // set back the interrupt flag if needed
+      if (interrupted) {
+        Thread.currentThread().interrupt();
       }
     }
   }

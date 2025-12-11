@@ -26,6 +26,9 @@ import org.junit.Test;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Paths;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.fail;
@@ -53,7 +56,6 @@ public class TestCriteoReadWriteDiskValidator {
   public void testReadWriteDiskValidator()
       throws DiskErrorException, InterruptedException {
     int count = 100;
-    File testDir = new File(System.getProperty("test.build.data"));
     CriteoReadWriteDiskValidator dv =
         (CriteoReadWriteDiskValidator) DiskValidatorFactory.getInstance(
             CriteoReadWriteDiskValidator.NAME);
@@ -100,6 +102,39 @@ public class TestCriteoReadWriteDiskValidator {
       fail("Disk check should fail.");
     } catch (DiskErrorException e) {
       assertEquals("Disk Check failed!", e.getMessage());
+    }
+  }
+
+  @Test
+  public void testShouldNotFailOnInterruptedThread() throws Throwable {
+
+    AtomicReference<Throwable> error = new AtomicReference<>();
+
+    CriteoReadWriteDiskValidator dv =
+            (CriteoReadWriteDiskValidator) DiskValidatorFactory.getInstance(
+                    CriteoReadWriteDiskValidator.NAME);
+
+    Thread thread = new Thread(() -> {
+      try {
+        // Simulate that this thread was interrupted earlier
+        Thread.currentThread().interrupt();
+
+        dv.checkStatus(testDir);
+      } catch (Throwable t) {
+        error.set(t);
+      }
+
+      //Check that the interrupt flag is still present after existing the disk validator
+      if (!Thread.currentThread().isInterrupted()) {
+        error.set(new RuntimeException("The thread was supposed to be interrupted"));
+      }
+    });
+
+    thread.start();
+    thread.join();
+
+    if (error.get() != null) {
+      throw error.get();
     }
   }
 }
