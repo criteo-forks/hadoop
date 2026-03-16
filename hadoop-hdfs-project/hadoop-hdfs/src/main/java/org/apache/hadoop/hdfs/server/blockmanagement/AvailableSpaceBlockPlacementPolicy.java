@@ -28,6 +28,7 @@ import java.util.EnumMap;
 import java.util.List;
 import java.util.Random;
 import java.util.Set;
+import java.util.function.Supplier;
 
 import org.apache.hadoop.thirdparty.com.google.common.base.Preconditions;
 import org.slf4j.Logger;
@@ -51,6 +52,7 @@ public class AvailableSpaceBlockPlacementPolicy extends
       (int) (100 * DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_PLACEMENT_POLICY_BALANCED_SPACE_PREFERENCE_FRACTION_DEFAULT);
   private int balancedSpaceTolerance =
           DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_PLACEMENT_POLICY_BALANCED_SPACE_TOLERANCE_DEFAULT;
+  private int datanodesInComparison = DFSConfigKeys.DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_PLACEMENT_POLICY_DATANODES_IN_COMPARISON_DEFAULT;
   private boolean optimizeLocal;
 
   @Override
@@ -70,6 +72,10 @@ public class AvailableSpaceBlockPlacementPolicy extends
         conf.getInt(
         DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_PLACEMENT_POLICY_BALANCED_SPACE_TOLERANCE_KEY,
         DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_PLACEMENT_POLICY_BALANCED_SPACE_TOLERANCE_DEFAULT);
+
+    datanodesInComparison = conf.getInt(
+        DFSConfigKeys.DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_PLACEMENT_POLICY_DATANODES_IN_COMPARISON_KEY,
+        DFSConfigKeys.DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_PLACEMENT_POLICY_DATANODES_IN_COMPARISON_DEFAULT);
 
     optimizeLocal = conf.getBoolean(
         DFSConfigKeys.DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_PLACEMENT_POLICY_BALANCE_LOCAL_NODE_KEY,
@@ -104,12 +110,9 @@ public class AvailableSpaceBlockPlacementPolicy extends
       final Collection<Node> excludedNode, StorageType type) {
     // only the code that uses DFSNetworkTopology should trigger this code path.
     Preconditions.checkArgument(clusterMap instanceof DFSNetworkTopology);
-    DFSNetworkTopology dfsClusterMap = (DFSNetworkTopology)clusterMap;
-    DatanodeDescriptor a = (DatanodeDescriptor) dfsClusterMap
-        .chooseRandomWithStorageTypeTwoTrial(scope, excludedNode, type);
-    DatanodeDescriptor b = (DatanodeDescriptor) dfsClusterMap
-        .chooseRandomWithStorageTypeTwoTrial(scope, excludedNode, type);
-    return select(a, b, false);
+    DFSNetworkTopology dfsClusterMap = (DFSNetworkTopology) clusterMap;
+    return select(false, () -> (DatanodeDescriptor) dfsClusterMap
+            .chooseRandomWithStorageTypeTwoTrial(scope, excludedNode, type));
   }
 
   @Override
@@ -171,13 +174,19 @@ public class AvailableSpaceBlockPlacementPolicy extends
   }
 
   @Override
-  protected DatanodeDescriptor chooseDataNode(final String scope,
-      final Collection<Node> excludedNode) {
-    DatanodeDescriptor a =
-        (DatanodeDescriptor) clusterMap.chooseRandom(scope, excludedNode);
-    DatanodeDescriptor b =
-        (DatanodeDescriptor) clusterMap.chooseRandom(scope, excludedNode);
-    return select(a, b, false);
+  protected DatanodeDescriptor chooseDataNode(final String scope, final Collection<Node> excludedNode) {
+    return select(false, () -> (DatanodeDescriptor) clusterMap.chooseRandom(scope, excludedNode));
+  }
+
+  private DatanodeDescriptor select(boolean isBalanceLocal, Supplier<DatanodeDescriptor> datanodeSupplier) {
+    DatanodeDescriptor node = datanodeSupplier.get();
+    for (int i = 0; i < datanodesInComparison - 1; i++) {
+      DatanodeDescriptor next = datanodeSupplier.get();
+      if (node == null || (next != null && compareDataNode(node, next, isBalanceLocal) > 0)) {
+        node = next;
+      }
+    }
+    return node;
   }
 
   private DatanodeDescriptor select(DatanodeDescriptor a, DatanodeDescriptor b,
