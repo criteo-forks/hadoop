@@ -1189,6 +1189,9 @@ public class DFSConfigKeys extends CommonConfigurationKeys {
   public static final int
       DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_RACK_FAULT_TOLERANT_PLACEMENT_POLICY_BALANCED_SPACE_TOLERANCE_DEFAULT =
       5;
+  public static final String DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_PLACEMENT_POLICY_DATANODES_IN_COMPARISON_KEY =
+      "dfs.namenode.available-space-block-placement-policy.datanodes-in-comparison";
+  public static final int DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_PLACEMENT_POLICY_DATANODES_IN_COMPARISON_DEFAULT = 2;
   public static final String
       DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_PLACEMENT_POLICY_BALANCE_LOCAL_NODE_KEY =
       "dfs.namenode.available-space-block-placement-policy.balance-local-node";
