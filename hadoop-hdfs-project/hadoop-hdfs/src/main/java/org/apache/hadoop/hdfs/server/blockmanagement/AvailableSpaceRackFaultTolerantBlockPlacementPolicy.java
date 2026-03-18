@@ -29,6 +29,7 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import java.util.Collection;
+import java.util.function.Supplier;
 import java.util.Random;
 
 import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_RACK_FAULT_TOLERANT_PLACEMENT_POLICY_BALANCED_SPACE_PREFERENCE_FRACTION_DEFAULT;
@@ -45,10 +46,14 @@ public class AvailableSpaceRackFaultTolerantBlockPlacementPolicy
   private static final Logger LOG = LoggerFactory
       .getLogger(AvailableSpaceRackFaultTolerantBlockPlacementPolicy.class);
   private static final Random RAND = new Random();
+  private static final int MIN_NODES_IN_COMPARISON = 2;
+  private static final int MAX_NODES_IN_COMPARISON = 100;
   private int balancedPreference = (int) (100
       * DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_RACK_FAULT_TOLERANT_PLACEMENT_POLICY_BALANCED_SPACE_PREFERENCE_FRACTION_DEFAULT);
   private int balancedSpaceTolerance =
         DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_RACK_FAULT_TOLERANT_PLACEMENT_POLICY_BALANCED_SPACE_TOLERANCE_DEFAULT;
+  private int datanodesInComparison = DFSConfigKeys.DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_PLACEMENT_POLICY_DATANODES_IN_COMPARISON_DEFAULT;
+
   @Override
   public void initialize(Configuration conf, FSClusterStats stats,
       NetworkTopology clusterMap, Host2NodesMap host2datanodeMap) {
@@ -60,6 +65,19 @@ public class AvailableSpaceRackFaultTolerantBlockPlacementPolicy
     balancedSpaceTolerance = conf.getInt(
             DFS_NAMENODE_AVAILABLE_SPACE_RACK_FAULT_TOLERANT_BLOCK_PLACEMENT_POLICY_BALANCED_SPACE_TOLERANCE_KEY,
             DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_RACK_FAULT_TOLERANT_PLACEMENT_POLICY_BALANCED_SPACE_TOLERANCE_DEFAULT);
+
+    datanodesInComparison = conf.getInt(
+            DFSConfigKeys.DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_PLACEMENT_POLICY_DATANODES_IN_COMPARISON_KEY,
+            DFSConfigKeys.DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_PLACEMENT_POLICY_DATANODES_IN_COMPARISON_DEFAULT);
+    if (datanodesInComparison < MIN_NODES_IN_COMPARISON) {
+      LOG.warn("The value of " + DFSConfigKeys.DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_PLACEMENT_POLICY_DATANODES_IN_COMPARISON_KEY
+              + " is less than the minimum value " + MIN_NODES_IN_COMPARISON + ", which will be used instead.");
+      datanodesInComparison = MIN_NODES_IN_COMPARISON;
+    } else if (datanodesInComparison > MAX_NODES_IN_COMPARISON) {
+      LOG.warn("The value of " + DFSConfigKeys.DFS_NAMENODE_AVAILABLE_SPACE_BLOCK_PLACEMENT_POLICY_DATANODES_IN_COMPARISON_KEY
+              + " is more than the maximum value " + MAX_NODES_IN_COMPARISON + ", which will be used instead.");
+      datanodesInComparison = MAX_NODES_IN_COMPARISON;
+    }
 
     LOG.info("Available space rack fault tolerant block placement policy "
         + "initialized: "
@@ -98,21 +116,42 @@ public class AvailableSpaceRackFaultTolerantBlockPlacementPolicy
     // only the code that uses DFSNetworkTopology should trigger this code path.
     Preconditions.checkArgument(clusterMap instanceof DFSNetworkTopology);
     DFSNetworkTopology dfsClusterMap = (DFSNetworkTopology) clusterMap;
-    DatanodeDescriptor a = (DatanodeDescriptor) dfsClusterMap
-        .chooseRandomWithStorageTypeTwoTrial(scope, excludedNode, type);
-    DatanodeDescriptor b = (DatanodeDescriptor) dfsClusterMap
-        .chooseRandomWithStorageTypeTwoTrial(scope, excludedNode, type);
-    return select(a, b);
+
+    if (this.datanodesInComparison == 2) {
+      DatanodeDescriptor a = (DatanodeDescriptor) dfsClusterMap
+              .chooseRandomWithStorageTypeTwoTrial(scope, excludedNode, type);
+      DatanodeDescriptor b = (DatanodeDescriptor) dfsClusterMap
+              .chooseRandomWithStorageTypeTwoTrial(scope, excludedNode, type);
+      return select(a, b);
+    } else {
+      return select(() ->
+              (DatanodeDescriptor) dfsClusterMap.chooseRandomWithStorageTypeTwoTrial(scope, excludedNode, type));
+    }
   }
 
   @Override
   protected DatanodeDescriptor chooseDataNode(final String scope,
       final Collection<Node> excludedNode) {
-    DatanodeDescriptor a =
-        (DatanodeDescriptor) clusterMap.chooseRandom(scope, excludedNode);
-    DatanodeDescriptor b =
-        (DatanodeDescriptor) clusterMap.chooseRandom(scope, excludedNode);
-    return select(a, b);
+    if (this.datanodesInComparison == 2) {
+      DatanodeDescriptor a =
+              (DatanodeDescriptor) clusterMap.chooseRandom(scope, excludedNode);
+      DatanodeDescriptor b =
+              (DatanodeDescriptor) clusterMap.chooseRandom(scope, excludedNode);
+      return select(a, b);
+    } else {
+      return select(() -> (DatanodeDescriptor) clusterMap.chooseRandom(scope, excludedNode));
+    }
+  }
+
+  private DatanodeDescriptor select(Supplier<DatanodeDescriptor> randomNodePicker) {
+    DatanodeDescriptor node = randomNodePicker.get();
+    for (int i = 0; i < datanodesInComparison - 1; i++) {
+      DatanodeDescriptor next = randomNodePicker.get();
+      if (node == null || (next != null && compareDataNode(node, next) > 0)) {
+        node = next;
+      }
+    }
+    return node;
   }
 
   private DatanodeDescriptor select(DatanodeDescriptor a,
