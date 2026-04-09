@@ -23,6 +23,7 @@ import javax.xml.bind.annotation.XmlAccessorType;
 import javax.xml.bind.annotation.XmlRootElement;
 
 import org.apache.hadoop.yarn.api.records.NodeLabel;
+import org.apache.hadoop.yarn.nodelabels.RMNodeLabel;
 
 @XmlRootElement(name = "nodeLabelInfo")
 @XmlAccessorType(XmlAccessType.FIELD)
@@ -30,6 +31,7 @@ public class NodeLabelInfo {
 
   private String name;
   private boolean exclusivity;
+  private int activeNMs;
 
   public NodeLabelInfo() {
     // JAXB needs this
@@ -50,12 +52,22 @@ public class NodeLabelInfo {
     this.exclusivity = label.isExclusive();
   }
 
+  public NodeLabelInfo(RMNodeLabel rmLabel) {
+    this.name = rmLabel.getLabelName();
+    this.exclusivity = rmLabel.getIsExclusive();
+    this.activeNMs = rmLabel.getNumActiveNMs();
+  }
+
   public String getName() {
     return name;
   }
 
   public boolean getExclusivity() {
     return exclusivity;
+  }
+
+  public int getActiveNMs() {
+    return activeNMs;
   }
 
   @Override
