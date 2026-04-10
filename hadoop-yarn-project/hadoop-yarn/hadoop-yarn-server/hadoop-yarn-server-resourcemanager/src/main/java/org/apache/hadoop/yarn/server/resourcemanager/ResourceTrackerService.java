@@ -538,7 +538,8 @@ public class ResourceTrackerService extends AbstractService implements
           && rmNode.getState() != NodeState.DECOMMISSIONING
           && rmNode.getHttpPort() != oldNode.getHttpPort()) {
         // Reconnected node differs, so replace old node and start new node
-        switch (rmNode.getState()) {
+        NodeState prevState = rmNode.getState();
+        switch (prevState) {
         case RUNNING:
           ClusterMetrics.getMetrics().decrNumActiveNodes();
           break;
@@ -547,6 +548,23 @@ public class ResourceTrackerService extends AbstractService implements
           break;
         default:
           LOG.debug("Unexpected Rmnode state");
+        }
+        String partition = "";
+        Set<String> labels = rmNode.getNodeLabels();
+        if (labels != null && !labels.isEmpty()) {
+          partition = labels.iterator().next();
+        }
+        PartitionClusterMetrics pm =
+            PartitionClusterMetrics.getMetrics(partition);
+        switch (prevState) {
+        case RUNNING:
+          pm.decrNumActiveNMs();
+          break;
+        case UNHEALTHY:
+          pm.decrUnhealthyNMs();
+          break;
+        default:
+          break;
         }
         this.rmContext.getDispatcher().getEventHandler()
             .handle(new NodeRemovedSchedulerEvent(rmNode));

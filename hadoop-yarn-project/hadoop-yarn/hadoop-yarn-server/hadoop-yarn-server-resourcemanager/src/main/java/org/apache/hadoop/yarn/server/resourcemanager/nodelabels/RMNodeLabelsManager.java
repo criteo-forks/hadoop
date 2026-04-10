@@ -39,6 +39,7 @@ import org.apache.hadoop.yarn.api.records.Resource;
 import org.apache.hadoop.yarn.nodelabels.CommonNodeLabelsManager;
 import org.apache.hadoop.yarn.nodelabels.RMNodeLabel;
 import org.apache.hadoop.yarn.security.YarnAuthorizationProvider;
+import org.apache.hadoop.yarn.server.resourcemanager.PartitionClusterMetrics;
 import org.apache.hadoop.yarn.server.resourcemanager.RMContext;
 import org.apache.hadoop.yarn.server.resourcemanager.scheduler.event.NodeLabelsUpdateSchedulerEvent;
 import org.apache.hadoop.yarn.util.resource.Resources;
@@ -505,10 +506,25 @@ public class RMNodeLabelsManager extends CommonNodeLabelsManager {
       }
     }
     
+    // Update per-partition JMX metrics
+    refreshPartitionClusterMetrics();
+
     // Notify RM
     if (rmContext != null && rmContext.getDispatcher() != null) {
       rmContext.getDispatcher().getEventHandler().handle(
           new NodeLabelsUpdateSchedulerEvent(newNodeToLabelsMap));
+    }
+  }
+
+  private void refreshPartitionClusterMetrics() {
+    for (Entry<String, RMNodeLabel> entry : labelCollections.entrySet()) {
+      String partition = entry.getKey();
+      RMNodeLabel label = entry.getValue();
+      Resource res = label.getResource();
+      PartitionClusterMetrics metrics =
+          PartitionClusterMetrics.getMetrics(partition);
+      metrics.setNumActiveNMs(label.getNumActiveNMs());
+      metrics.setCapability(res.getMemorySize(), res.getVirtualCores());
     }
   }
   

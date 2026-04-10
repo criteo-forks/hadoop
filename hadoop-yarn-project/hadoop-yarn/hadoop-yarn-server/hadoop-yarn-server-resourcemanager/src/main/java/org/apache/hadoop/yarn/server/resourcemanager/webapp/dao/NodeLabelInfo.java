@@ -23,6 +23,7 @@ import javax.xml.bind.annotation.XmlAccessorType;
 import javax.xml.bind.annotation.XmlRootElement;
 
 import org.apache.hadoop.yarn.api.records.NodeLabel;
+import org.apache.hadoop.yarn.nodelabels.RMNodeLabel;
 
 @XmlRootElement(name = "nodeLabelInfo")
 @XmlAccessorType(XmlAccessType.FIELD)
@@ -57,6 +58,12 @@ public class NodeLabelInfo {
     this.partitionInfo = partitionInfo;
   }
 
+  public NodeLabelInfo(RMNodeLabel rmLabel) {
+    this.name = rmLabel.getLabelName();
+    this.exclusivity = rmLabel.getIsExclusive();
+    this.activeNMs = rmLabel.getNumActiveNMs();
+  }
+
   public String getName() {
     return name;
   }
@@ -88,6 +95,7 @@ public class NodeLabelInfo {
   public void setPartitionInfo(PartitionInfo partitionInfo) {
     this.partitionInfo = partitionInfo;
   }
+
 
   @Override
   public boolean equals(Object obj) {

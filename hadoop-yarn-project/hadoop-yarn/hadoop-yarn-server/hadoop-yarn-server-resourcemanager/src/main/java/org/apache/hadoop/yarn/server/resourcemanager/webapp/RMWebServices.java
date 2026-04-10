@@ -116,6 +116,7 @@ import org.apache.hadoop.yarn.api.records.FinalApplicationStatus;
 import org.apache.hadoop.yarn.api.records.NodeId;
 import org.apache.hadoop.yarn.api.records.NodeLabel;
 import org.apache.hadoop.yarn.api.records.NodeState;
+import org.apache.hadoop.yarn.nodelabels.RMNodeLabel;
 import org.apache.hadoop.yarn.api.records.Priority;
 import org.apache.hadoop.yarn.api.records.QueueACL;
 import org.apache.hadoop.yarn.api.records.ReservationDefinition;
@@ -1484,16 +1485,20 @@ public class RMWebServices extends WebServices implements RMWebServiceProtocol {
       throws IOException {
     initForReadableEndpoints();
 
-    List<NodeLabel> nodeLabels =
-        rm.getRMContext().getNodeLabelManager().getClusterNodeLabels();
+    RMNodeLabelsManager nlm = rm.getRMContext().getNodeLabelManager();
 
     ArrayList<NodeLabelInfo> nodeLabelsInfo = new ArrayList<NodeLabelInfo>();
-    for (NodeLabel label: nodeLabels) {
-      Resource resource = rm.getRMContext().getNodeLabelManager()
-          .getResourceByLabel(label.getName(), Resources.none());
+    for (RMNodeLabel info : nlm.pullRMNodeLabelsInfo()) {
+      if (info.getLabelName().isEmpty()) {
+        continue;
+      }
       PartitionInfo partitionInfo =
-          new PartitionInfo(new ResourceInfo(resource));
-      nodeLabelsInfo.add(new NodeLabelInfo(label, partitionInfo));
+          new PartitionInfo(new ResourceInfo(info.getResource()));
+      NodeLabel nodeLabel =
+          NodeLabel.newInstance(info.getLabelName(), info.getIsExclusive());
+      NodeLabelInfo nodeLabelInfo = new NodeLabelInfo(nodeLabel, partitionInfo);
+      nodeLabelInfo.setActiveNMs(info.getNumActiveNMs());
+      nodeLabelsInfo.add(nodeLabelInfo);
     }
 
     return new NodeLabelsInfo(nodeLabelsInfo);
