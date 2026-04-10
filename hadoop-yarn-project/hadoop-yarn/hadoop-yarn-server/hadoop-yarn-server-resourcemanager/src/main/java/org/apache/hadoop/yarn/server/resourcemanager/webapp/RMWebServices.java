@@ -114,6 +114,7 @@ import org.apache.hadoop.yarn.api.records.FinalApplicationStatus;
 import org.apache.hadoop.yarn.api.records.NodeId;
 import org.apache.hadoop.yarn.api.records.NodeLabel;
 import org.apache.hadoop.yarn.api.records.NodeState;
+import org.apache.hadoop.yarn.nodelabels.RMNodeLabel;
 import org.apache.hadoop.yarn.api.records.Priority;
 import org.apache.hadoop.yarn.api.records.QueueACL;
 import org.apache.hadoop.yarn.api.records.ReservationDefinition;
@@ -1388,9 +1389,10 @@ public class RMWebServices extends WebServices implements RMWebServiceProtocol {
       throws IOException {
     initForReadableEndpoints();
 
-    List<NodeLabel> nodeLabels =
-        rm.getRMContext().getNodeLabelManager().getClusterNodeLabels();
-    NodeLabelsInfo ret = new NodeLabelsInfo(nodeLabels);
+    List<RMNodeLabel> rmLabels =
+        rm.getRMContext().getNodeLabelManager().pullRMNodeLabelsInfo();
+    rmLabels.removeIf(l -> l.getLabelName().isEmpty());
+    NodeLabelsInfo ret = NodeLabelsInfo.fromRMNodeLabels(rmLabels);
 
     return ret;
   }

@@ -26,6 +26,7 @@ import javax.xml.bind.annotation.XmlElement;
 import javax.xml.bind.annotation.XmlRootElement;
 
 import org.apache.hadoop.yarn.api.records.NodeLabel;
+import org.apache.hadoop.yarn.nodelabels.RMNodeLabel;
 
 @XmlRootElement(name = "nodeLabelsInfo")
 @XmlAccessorType(XmlAccessType.FIELD)
@@ -55,6 +56,15 @@ public class NodeLabelsInfo {
     for (String labelName : nodeLabelsName) {
       this.nodeLabelsInfo.add(new NodeLabelInfo(labelName));
     }
+  }
+
+  public static NodeLabelsInfo fromRMNodeLabels(
+      List<RMNodeLabel> rmLabels) {
+    NodeLabelsInfo info = new NodeLabelsInfo();
+    for (RMNodeLabel rmLabel : rmLabels) {
+      info.nodeLabelsInfo.add(new NodeLabelInfo(rmLabel));
+    }
+    return info;
   }
 
   public ArrayList<NodeLabelInfo> getNodeLabelsInfo() {

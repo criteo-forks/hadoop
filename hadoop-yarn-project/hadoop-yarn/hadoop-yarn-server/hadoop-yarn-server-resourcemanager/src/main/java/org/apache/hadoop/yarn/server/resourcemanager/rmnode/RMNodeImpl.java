@@ -70,6 +70,7 @@ import org.apache.hadoop.yarn.server.api.protocolrecords.NodeHeartbeatResponse;
 import org.apache.hadoop.yarn.server.api.records.OpportunisticContainersStatus;
 import org.apache.hadoop.yarn.server.api.records.NodeHealthStatus;
 import org.apache.hadoop.yarn.server.resourcemanager.ClusterMetrics;
+import org.apache.hadoop.yarn.server.resourcemanager.PartitionClusterMetrics;
 import org.apache.hadoop.yarn.server.resourcemanager.NodesListManagerEvent;
 import org.apache.hadoop.yarn.server.resourcemanager.NodesListManagerEventType;
 import org.apache.hadoop.yarn.server.resourcemanager.NodesListManager;
@@ -792,6 +793,7 @@ public class RMNodeImpl implements RMNode, EventHandler<RMNodeEvent> {
     // Update utilization metrics
     this.updateClusterUtilizationMetrics();
     decrementMetricBasedOnPreviousNodeState(previousNodeState);
+    decrPartitionMetric(previousNodeState);
   }
 
   private void decrementMetricBasedOnPreviousNodeState(NodeState previousNodeState) {
@@ -848,6 +850,9 @@ public class RMNodeImpl implements RMNode, EventHandler<RMNodeEvent> {
     default :
       LOG.warn("Unexpected final state");
     }
+
+    decrPartitionMetric(initialState);
+    incrPartitionMetric(finalState);
   }
 
   private void updateMetricsForDeactivatedNode(NodeState initialState,
@@ -897,6 +902,83 @@ public class RMNodeImpl implements RMNode, EventHandler<RMNodeEvent> {
       break;
     default:
       LOG.warn("Unexpected final state");
+    }
+
+    decrPartitionMetric(initialState);
+    incrPartitionMetric(finalState);
+  }
+
+  /**
+   * Returns the partition (node label) this node belongs to.
+   * Empty string means the default partition.
+   */
+  private String getPartition() {
+    Set<String> labels = getNodeLabels();
+    if (labels == null || labels.isEmpty()) {
+      return "";
+    }
+    return labels.iterator().next();
+  }
+
+  private PartitionClusterMetrics getPartitionMetrics() {
+    return PartitionClusterMetrics.getMetrics(getPartition());
+  }
+
+  private void incrPartitionMetric(NodeState state) {
+    PartitionClusterMetrics pm = getPartitionMetrics();
+    switch (state) {
+    case RUNNING:
+      pm.incrNumActiveNMs();
+      break;
+    case DECOMMISSIONING:
+      pm.incrDecommissioningNMs();
+      break;
+    case DECOMMISSIONED:
+      pm.incrDecommissionedNMs();
+      break;
+    case UNHEALTHY:
+      pm.incrUnhealthyNMs();
+      break;
+    case LOST:
+      pm.incrLostNMs();
+      break;
+    case REBOOTED:
+      pm.incrRebootedNMs();
+      break;
+    case SHUTDOWN:
+      pm.incrShutdownNMs();
+      break;
+    default:
+      break;
+    }
+  }
+
+  private void decrPartitionMetric(NodeState state) {
+    PartitionClusterMetrics pm = getPartitionMetrics();
+    switch (state) {
+    case RUNNING:
+      pm.decrNumActiveNMs();
+      break;
+    case DECOMMISSIONING:
+      pm.decrDecommissioningNMs();
+      break;
+    case DECOMMISSIONED:
+      pm.decrDecommissionedNMs();
+      break;
+    case UNHEALTHY:
+      pm.decrUnhealthyNMs();
+      break;
+    case LOST:
+      pm.decrLostNMs();
+      break;
+    case REBOOTED:
+      pm.decrRebootedNMs();
+      break;
+    case SHUTDOWN:
+      pm.decrShutdownNMs();
+      break;
+    default:
+      break;
     }
   }
 
