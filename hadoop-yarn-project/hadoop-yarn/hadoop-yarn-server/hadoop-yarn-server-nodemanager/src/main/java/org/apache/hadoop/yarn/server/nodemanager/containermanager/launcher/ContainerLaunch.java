@@ -1357,7 +1357,12 @@ public class ContainerLaunch implements Callable<Integer> {
     @Override
     public void criteoHookScript() throws IOException {
       echo("Launching criteo hook script");
-      line("bash -c \"${CRITEO_HOOK_SCRIPT:-\"echo 'No hook script defined. Skipping...'\"}\"");
+      line("if [ -z \"${CRITEO_HOOK_SCRIPT}\" ]");
+      line("then");
+      line("  echo 'No hook script defined. Skipping...'");
+      line("else");
+      line("  source \"${CRITEO_HOOK_SCRIPT}\"");
+      line("fi");
     }
 
     @Override
