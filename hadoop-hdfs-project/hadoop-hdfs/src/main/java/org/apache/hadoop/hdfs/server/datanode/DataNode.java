@@ -4144,8 +4144,7 @@ public class DataNode extends ReconfigurableBase
         || stage == PIPELINE_SETUP_APPEND_RECOVERY);
   }
 
-  @VisibleForTesting
-  public BlockPoolManager getBlockPoolManager() {
+  BlockPoolManager getBlockPoolManager() {
     return blockPoolManager;
   }
 }
