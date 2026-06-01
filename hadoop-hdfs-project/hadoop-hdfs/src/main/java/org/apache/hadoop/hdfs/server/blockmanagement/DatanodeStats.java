@@ -21,18 +21,63 @@ import org.apache.hadoop.fs.StorageType;
 import org.apache.hadoop.hdfs.DFSUtilClient;
 import org.apache.hadoop.hdfs.server.protocol.DatanodeStorage;
 
+import java.util.ArrayList;
 import java.util.EnumMap;
-import java.util.HashSet;
+import java.util.HashMap;
+import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 /**
  * Datanode statistics.
  * For decommissioning/decommissioned nodes, only used capacity is counted.
+ *
+ * <p>The aggregate counters exposed by the public getters are maintained
+ * incrementally for O(1) reads but are fully reversible because every
+ * contribution is captured as a {@link GlobalContribution} snapshot keyed by
+ * the contributing {@link DatanodeDescriptor}. Per-storage-type accounting is
+ * delegated to {@link StorageTypeStatsMap} which uses the same pattern. This
+ * makes {@link #add} / {@link #subtract} idempotent: repeating an
+ * {@code add} simply replaces the node's contribution, and a {@code subtract}
+ * on a node that was never added is a no-op. As a result the counters cannot
+ * drift even if these methods are called asymmetrically (block reports
+ * racing ahead of the first heartbeat after registration, storage state
+ * transitions, exceptions escaping between paired calls, etc.).
  */
 class DatanodeStats {
 
+  /** Snapshot of what a single {@link DatanodeDescriptor} contributes. */
+  private static final class GlobalContribution {
+    final boolean inService;
+    final long capacityTotal;
+    final long capacityUsed;
+    final long capacityUsedNonDfs;
+    final long capacityRemaining;
+    final long blockPoolUsed;
+    final long cacheCapacity;
+    final long cacheUsed;
+    final int xceiverCount;
+    final int availableVolumeCount;
+
+    GlobalContribution(boolean inService, long capacityTotal, long capacityUsed,
+        long capacityUsedNonDfs, long capacityRemaining, long blockPoolUsed,
+        long cacheCapacity, long cacheUsed, int xceiverCount,
+        int availableVolumeCount) {
+      this.inService = inService;
+      this.capacityTotal = capacityTotal;
+      this.capacityUsed = capacityUsed;
+      this.capacityUsedNonDfs = capacityUsedNonDfs;
+      this.capacityRemaining = capacityRemaining;
+      this.blockPoolUsed = blockPoolUsed;
+      this.cacheCapacity = cacheCapacity;
+      this.cacheUsed = cacheUsed;
+      this.xceiverCount = xceiverCount;
+      this.availableVolumeCount = availableVolumeCount;
+    }
+  }
+
   private final StorageTypeStatsMap statsMap = new StorageTypeStatsMap();
+
   private long capacityTotal = 0L;
   private long capacityUsed = 0L;
   private long capacityUsedNonDfs = 0L;
@@ -47,63 +92,91 @@ class DatanodeStats {
   private int nodesInServiceAvailableVolumeCount = 0;
   private int expiredHeartbeats = 0;
 
+  /** Per-DN contribution snapshot for the global aggregates. */
+  private final Map<DatanodeDescriptor, GlobalContribution> contributions =
+      new HashMap<>();
+
   synchronized void add(final DatanodeDescriptor node) {
-    xceiverCount += node.getXceiverCount();
-    if (node.isInService()) {
-      capacityUsed += node.getDfsUsed();
-      capacityUsedNonDfs += node.getNonDfsUsed();
-      blockPoolUsed += node.getBlockPoolUsed();
-      nodesInService++;
-      nodesInServiceXceiverCount += node.getXceiverCount();
-      capacityTotal += node.getCapacity();
-      capacityRemaining += node.getRemaining();
-      cacheCapacity += node.getCacheCapacity();
-      cacheUsed += node.getCacheUsed();
-      nodesInServiceAvailableVolumeCount += node.getNumVolumesAvailable();
-    } else if (node.isDecommissionInProgress() ||
-        node.isEnteringMaintenance()) {
-      cacheCapacity += node.getCacheCapacity();
-      cacheUsed += node.getCacheUsed();
+    GlobalContribution prev = contributions.remove(node);
+    if (prev != null) {
+      revert(prev);
     }
-    Set<StorageType> storageTypes = new HashSet<>();
-    for (DatanodeStorageInfo storageInfo : node.getStorageInfos()) {
-      if (storageInfo.getState() != DatanodeStorage.State.FAILED) {
-        statsMap.addStorage(storageInfo, node);
-        storageTypes.add(storageInfo.getStorageType());
-      }
-    }
-    for (StorageType storageType : storageTypes) {
-      statsMap.addNode(storageType, node);
-    }
+    GlobalContribution now = capture(node);
+    apply(now);
+    contributions.put(node, now);
+
+    statsMap.refresh(node);
   }
 
   synchronized void subtract(final DatanodeDescriptor node) {
-    xceiverCount -= node.getXceiverCount();
-    if (node.isInService()) {
-      capacityUsed -= node.getDfsUsed();
-      capacityUsedNonDfs -= node.getNonDfsUsed();
-      blockPoolUsed -= node.getBlockPoolUsed();
+    GlobalContribution prev = contributions.remove(node);
+    if (prev != null) {
+      revert(prev);
+    }
+
+    statsMap.remove(node);
+  }
+
+  private static GlobalContribution capture(final DatanodeDescriptor node) {
+    boolean inService = node.isInService();
+    boolean decomOrEnteringMaintenance = !inService
+        && (node.isDecommissionInProgress() || node.isEnteringMaintenance());
+
+    long cTotal = 0L;
+    long cUsed = 0L;
+    long cUsedNonDfs = 0L;
+    long cRemaining = 0L;
+    long bpUsed = 0L;
+    long cacheCap = 0L;
+    long cacheUsd = 0L;
+    int availableVolumes = 0;
+    if (inService) {
+      cTotal = node.getCapacity();
+      cUsed = node.getDfsUsed();
+      cUsedNonDfs = node.getNonDfsUsed();
+      cRemaining = node.getRemaining();
+      bpUsed = node.getBlockPoolUsed();
+      cacheCap = node.getCacheCapacity();
+      cacheUsd = node.getCacheUsed();
+      availableVolumes = node.getNumVolumesAvailable();
+    } else if (decomOrEnteringMaintenance) {
+      cacheCap = node.getCacheCapacity();
+      cacheUsd = node.getCacheUsed();
+    }
+    int xceiver = node.getXceiverCount();
+    return new GlobalContribution(inService, cTotal, cUsed, cUsedNonDfs,
+        cRemaining, bpUsed, cacheCap, cacheUsd, xceiver, availableVolumes);
+  }
+
+  private void apply(GlobalContribution c) {
+    xceiverCount += c.xceiverCount;
+    capacityTotal += c.capacityTotal;
+    capacityUsed += c.capacityUsed;
+    capacityUsedNonDfs += c.capacityUsedNonDfs;
+    capacityRemaining += c.capacityRemaining;
+    blockPoolUsed += c.blockPoolUsed;
+    cacheCapacity += c.cacheCapacity;
+    cacheUsed += c.cacheUsed;
+    if (c.inService) {
+      nodesInService++;
+      nodesInServiceXceiverCount += c.xceiverCount;
+      nodesInServiceAvailableVolumeCount += c.availableVolumeCount;
+    }
+  }
+
+  private void revert(GlobalContribution c) {
+    xceiverCount -= c.xceiverCount;
+    capacityTotal -= c.capacityTotal;
+    capacityUsed -= c.capacityUsed;
+    capacityUsedNonDfs -= c.capacityUsedNonDfs;
+    capacityRemaining -= c.capacityRemaining;
+    blockPoolUsed -= c.blockPoolUsed;
+    cacheCapacity -= c.cacheCapacity;
+    cacheUsed -= c.cacheUsed;
+    if (c.inService) {
       nodesInService--;
-      nodesInServiceXceiverCount -= node.getXceiverCount();
-      capacityTotal -= node.getCapacity();
-      capacityRemaining -= node.getRemaining();
-      cacheCapacity -= node.getCacheCapacity();
-      cacheUsed -= node.getCacheUsed();
-      nodesInServiceAvailableVolumeCount -= node.getNumVolumesAvailable();
-    } else if (node.isDecommissionInProgress() ||
-        node.isEnteringMaintenance()) {
-      cacheCapacity -= node.getCacheCapacity();
-      cacheUsed -= node.getCacheUsed();
-    }
-    Set<StorageType> storageTypes = new HashSet<>();
-    for (DatanodeStorageInfo storageInfo : node.getStorageInfos()) {
-      if (storageInfo.getState() != DatanodeStorage.State.FAILED) {
-        statsMap.subtractStorage(storageInfo, node);
-        storageTypes.add(storageInfo.getStorageType());
-      }
-    }
-    for (StorageType storageType : storageTypes) {
-      statsMap.subtractNode(storageType, node);
+      nodesInServiceXceiverCount -= c.xceiverCount;
+      nodesInServiceAvailableVolumeCount -= c.availableVolumeCount;
     }
   }
 
@@ -176,53 +249,70 @@ class DatanodeStats {
     return DFSUtilClient.getPercentUsed(capacityUsed, capacityTotal);
   }
 
+  /**
+   * Per-storage-type accounting. Delegates to a {@link StorageTypeStats}
+   * instance per storage type, which itself uses contribution snapshots so
+   * that {@link #refresh} / {@link #remove} are idempotent and self-healing.
+   */
   static final class StorageTypeStatsMap {
 
-    private Map<StorageType, StorageTypeStats> storageTypeStatsMap =
+    private final Map<StorageType, StorageTypeStats> storageTypeStatsMap =
         new EnumMap<>(StorageType.class);
 
     private Map<StorageType, StorageTypeStats> get() {
       return new EnumMap<>(storageTypeStatsMap);
     }
 
-    private void addNode(StorageType storageType,
-        final DatanodeDescriptor node) {
-      StorageTypeStats storageTypeStats =
-          storageTypeStatsMap.get(storageType);
-      if (storageTypeStats == null) {
-        storageTypeStats = new StorageTypeStats(storageType);
-        storageTypeStatsMap.put(storageType, storageTypeStats);
+    /**
+     * Refresh {@code node}'s contribution across all storage types it
+     * currently has (non-FAILED), and drop its contribution from any type
+     * it no longer has. Safe to call repeatedly.
+     */
+    private void refresh(final DatanodeDescriptor node) {
+      Map<StorageType, List<DatanodeStorageInfo>> byType =
+          new EnumMap<>(StorageType.class);
+      for (DatanodeStorageInfo info : node.getStorageInfos()) {
+        if (info.getState() != DatanodeStorage.State.FAILED) {
+          byType.computeIfAbsent(info.getStorageType(),
+              k -> new ArrayList<>()).add(info);
+        }
       }
-      storageTypeStats.addNode(node);
+
+      for (Map.Entry<StorageType, List<DatanodeStorageInfo>> e
+          : byType.entrySet()) {
+        StorageTypeStats stats = storageTypeStatsMap.get(e.getKey());
+        if (stats == null) {
+          stats = new StorageTypeStats(e.getKey());
+          storageTypeStatsMap.put(e.getKey(), stats);
+        }
+        stats.put(node, e.getValue());
+      }
+
+      Iterator<Map.Entry<StorageType, StorageTypeStats>> it =
+          storageTypeStatsMap.entrySet().iterator();
+      while (it.hasNext()) {
+        Map.Entry<StorageType, StorageTypeStats> entry = it.next();
+        if (!byType.containsKey(entry.getKey())) {
+          entry.getValue().remove(node);
+        }
+        if (entry.getValue().isEmpty()) {
+          it.remove();
+        }
+      }
     }
 
-    private void addStorage(final DatanodeStorageInfo info,
-        final DatanodeDescriptor node) {
-      StorageTypeStats storageTypeStats =
-          storageTypeStatsMap.get(info.getStorageType());
-      if (storageTypeStats == null) {
-        storageTypeStats = new StorageTypeStats(info.getStorageType());
-        storageTypeStatsMap.put(info.getStorageType(), storageTypeStats);
-      }
-      storageTypeStats.addStorage(info, node);
-    }
-
-    private void subtractStorage(final DatanodeStorageInfo info,
-        final DatanodeDescriptor node) {
-      StorageTypeStats storageTypeStats =
-          storageTypeStatsMap.get(info.getStorageType());
-      if (storageTypeStats != null) {
-        storageTypeStats.subtractStorage(info, node);
-      }
-    }
-
-    private void subtractNode(StorageType storageType,
-        final DatanodeDescriptor node) {
-      StorageTypeStats storageTypeStats = storageTypeStatsMap.get(storageType);
-      if (storageTypeStats != null) {
-        storageTypeStats.subtractNode(node);
-        if (storageTypeStats.getNodesInService() == 0) {
-          storageTypeStatsMap.remove(storageType);
+    /**
+     * Drop {@code node}'s contribution from every storage type. Safe to call
+     * repeatedly; types the node never contributed to are unaffected.
+     */
+    private void remove(final DatanodeDescriptor node) {
+      Iterator<Map.Entry<StorageType, StorageTypeStats>> it =
+          storageTypeStatsMap.entrySet().iterator();
+      while (it.hasNext()) {
+        Map.Entry<StorageType, StorageTypeStats> entry = it.next();
+        entry.getValue().remove(node);
+        if (entry.getValue().isEmpty()) {
+          it.remove();
         }
       }
     }
