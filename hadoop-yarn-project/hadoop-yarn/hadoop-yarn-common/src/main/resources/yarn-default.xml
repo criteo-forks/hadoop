@@ -1378,6 +1378,81 @@
   </property>
 
   <property>
+    <description>Whether the NodeManager periodically reaps application
+      directories (usercache/&lt;user&gt;/appcache/&lt;app-id&gt; and
+      nmPrivate/&lt;app-id&gt;) left behind by applications it no longer tracks.
+      Because yarn.nodemanager.localizer.cache.target-size-mb excludes
+      resources with APPLICATION visibility, those directories are never
+      size-capped and no other cleanup path can reach them once the
+      application has been removed from the NodeManager's application map.
+      When enabled, each orphaned application is pushed through the regular
+      application-finish cleanup chain. Resources under any filecache
+      directory are never touched.
+    </description>
+    <name>yarn.nodemanager.orphaned-app-dirs.cleanup.enabled</name>
+    <value>false</value>
+  </property>
+
+  <property>
+    <description>Interval in between scans for orphaned application
+      directories. Only used when
+      yarn.nodemanager.orphaned-app-dirs.cleanup.enabled is true.
+    </description>
+    <name>yarn.nodemanager.orphaned-app-dirs.cleanup.interval-ms</name>
+    <value>3600000</value>
+  </property>
+
+  <property>
+    <description>Minimum age of an application directory before it may be
+      considered orphaned. This guards against reaping a directory that is
+      being created concurrently with the scan.
+    </description>
+    <name>yarn.nodemanager.orphaned-app-dirs.min-age-ms</name>
+    <value>21600000</value>
+  </property>
+
+  <property>
+    <description>Maximum number of orphaned applications reaped per scan, so
+      that a first run on a badly-leaked node cannot produce a deletion storm.
+      Remaining candidates are picked up by subsequent scans.
+    </description>
+    <name>yarn.nodemanager.orphaned-app-dirs.max-per-interval</name>
+    <value>50</value>
+  </property>
+
+  <property>
+    <description>Absolute path of a privileged helper, run through sudo, that
+      restores ownership of an orphaned application's local directories so that
+      the NodeManager can delete them as the application user. Empty by default,
+      which means no helper is run.
+
+      Such directories can contain root-owned content at any depth, created
+      either by the Docker daemon re-creating a missing bind-mount source or by a
+      process running as root inside a container writing to a bind-mounted host
+      directory. Deletion runs as the application user and can never remove
+      that content, so without a helper those applications are not collected.
+
+      The helper is passed only a user name and an application id; it derives
+      every path itself from a root-owned configuration file. Its ownership,
+      mode and sudoers rule are security requirements, not conventions: it runs
+      as root, so write access for any other account is a root escalation.
+      Verify a node with yarn-reown-orphan-app-dir-verify-setup before setting
+      this.
+    </description>
+    <name>yarn.nodemanager.orphaned-app-dirs.reown.command</name>
+    <value></value>
+  </property>
+
+  <property>
+    <description>Timeout in milliseconds for a single invocation of the re-own
+      helper. The scan shares the cache-cleanup scheduler, so an unbounded call
+      would stall cache cleanup.
+    </description>
+    <name>yarn.nodemanager.orphaned-app-dirs.reown.timeout-ms</name>
+    <value>60000</value>
+  </property>
+
+  <property>
     <description>Number of threads to handle localization requests.</description>
     <name>yarn.nodemanager.localizer.client.thread-count</name>
     <value>5</value>

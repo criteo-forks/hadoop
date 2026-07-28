@@ -163,13 +163,20 @@ public class ResourceLocalizationService extends CompositeService
   @VisibleForTesting
   long cacheTargetSize;
   private long cacheCleanupPeriod;
+  private boolean orphanedAppDirsCleanupEnabled;
+  private long orphanedAppDirsCleanupPeriod;
+  private long orphanedAppDirsMinAge;
+  private int orphanedAppDirsMaxPerInterval;
+  private String orphanedAppDirsReownCommand;
+  private long orphanedAppDirsReownTimeout;
 
   private final ContainerExecutor exec;
   protected final Dispatcher dispatcher;
   private final DeletionService delService;
   private LocalizerTracker localizerTracker;
   private RecordFactory recordFactory;
-  private final ScheduledExecutorService cacheCleanup;
+  @VisibleForTesting
+  final ScheduledExecutorService cacheCleanup;
   private LocalizerTokenSecretManager secretManager;
   private NMStateStoreService stateStore;
   @VisibleForTesting
@@ -212,7 +219,9 @@ public class ResourceLocalizationService extends CompositeService
     this.delService = delService;
     this.dirsHandler = dirsHandler;
 
-    this.cacheCleanup = new HadoopScheduledThreadPoolExecutor(1,
+    // Two threads: an orphaned application directory scan walks the local
+    // filesystem and must not be able to delay cache cleanup.
+    this.cacheCleanup = new HadoopScheduledThreadPoolExecutor(2,
         new ThreadFactoryBuilder()
           .setNameFormat("ResourceLocalizationService Cache Cleanup")
           .build());
@@ -272,6 +281,44 @@ public class ResourceLocalizationService extends CompositeService
       conf.getLong(YarnConfiguration.NM_LOCALIZER_CACHE_TARGET_SIZE_MB, YarnConfiguration.DEFAULT_NM_LOCALIZER_CACHE_TARGET_SIZE_MB) << 20;
     cacheCleanupPeriod =
       conf.getLong(YarnConfiguration.NM_LOCALIZER_CACHE_CLEANUP_INTERVAL_MS, YarnConfiguration.DEFAULT_NM_LOCALIZER_CACHE_CLEANUP_INTERVAL_MS);
+    orphanedAppDirsCleanupEnabled = conf.getBoolean(
+        YarnConfiguration.NM_ORPHANED_APP_DIRS_CLEANUP_ENABLED,
+        YarnConfiguration.DEFAULT_NM_ORPHANED_APP_DIRS_CLEANUP_ENABLED);
+    orphanedAppDirsCleanupPeriod = conf.getLong(
+        YarnConfiguration.NM_ORPHANED_APP_DIRS_CLEANUP_INTERVAL_MS,
+        YarnConfiguration.DEFAULT_NM_ORPHANED_APP_DIRS_CLEANUP_INTERVAL_MS);
+    orphanedAppDirsMinAge = conf.getLong(
+        YarnConfiguration.NM_ORPHANED_APP_DIRS_MIN_AGE_MS,
+        YarnConfiguration.DEFAULT_NM_ORPHANED_APP_DIRS_MIN_AGE_MS);
+    orphanedAppDirsMaxPerInterval = conf.getInt(
+        YarnConfiguration.NM_ORPHANED_APP_DIRS_MAX_PER_INTERVAL,
+        YarnConfiguration.DEFAULT_NM_ORPHANED_APP_DIRS_MAX_PER_INTERVAL);
+    orphanedAppDirsReownCommand = conf.getTrimmed(
+        YarnConfiguration.NM_ORPHANED_APP_DIRS_REOWN_COMMAND,
+        YarnConfiguration.DEFAULT_NM_ORPHANED_APP_DIRS_REOWN_COMMAND);
+    orphanedAppDirsReownTimeout = conf.getLong(
+        YarnConfiguration.NM_ORPHANED_APP_DIRS_REOWN_TIMEOUT_MS,
+        YarnConfiguration.DEFAULT_NM_ORPHANED_APP_DIRS_REOWN_TIMEOUT_MS);
+    if (orphanedAppDirsReownTimeout <= 0) {
+      // Shell arms its timeout timer only for a positive value, so this would
+      // otherwise leave the helper unbounded on the cache-cleanup scheduler.
+      LOG.warn("{} must be positive but is {}; using the default of {} ms"
+          + " instead, because a non-positive value disables the timeout"
+          + " altogether and the re-own helper shares the cache-cleanup"
+          + " scheduler", YarnConfiguration.NM_ORPHANED_APP_DIRS_REOWN_TIMEOUT_MS,
+          orphanedAppDirsReownTimeout,
+          YarnConfiguration.DEFAULT_NM_ORPHANED_APP_DIRS_REOWN_TIMEOUT_MS);
+      orphanedAppDirsReownTimeout =
+          YarnConfiguration.DEFAULT_NM_ORPHANED_APP_DIRS_REOWN_TIMEOUT_MS;
+    }
+    if (orphanedAppDirsMaxPerInterval < 0) {
+      LOG.warn("{} must not be negative but is {}; using the default of {}"
+          + " instead", YarnConfiguration.NM_ORPHANED_APP_DIRS_MAX_PER_INTERVAL,
+          orphanedAppDirsMaxPerInterval,
+          YarnConfiguration.DEFAULT_NM_ORPHANED_APP_DIRS_MAX_PER_INTERVAL);
+      orphanedAppDirsMaxPerInterval =
+          YarnConfiguration.DEFAULT_NM_ORPHANED_APP_DIRS_MAX_PER_INTERVAL;
+    }
     localizationServerAddress = conf.getSocketAddr(
         YarnConfiguration.NM_BIND_HOST,
         YarnConfiguration.NM_LOCALIZER_ADDRESS,
@@ -381,6 +428,7 @@ public class ResourceLocalizationService extends CompositeService
   public void serviceStart() throws Exception {
     cacheCleanup.scheduleWithFixedDelay(new CacheCleanup(dispatcher),
         cacheCleanupPeriod, cacheCleanupPeriod, TimeUnit.MILLISECONDS);
+    scheduleOrphanedAppReaper();
     server = createServer();
     server.start();
     localizationServerAddress =
@@ -392,6 +440,78 @@ public class ResourceLocalizationService extends CompositeService
     super.serviceStart();
     dirsHandler.registerLocalDirsChangeListener(localDirsChangeListener);
     dirsHandler.registerLogDirsChangeListener(logDirsChangeListener);
+  }
+
+  /**
+   * Schedules the reaper for application directories left behind by
+   * applications the NodeManager no longer tracks. The scan runs on the
+   * cache-cleanup scheduler and only dispatches per-application events, so a
+   * filesystem walk never lands on the localization dispatcher thread, which
+   * is on the container-launch critical path.
+   */
+  @VisibleForTesting
+  void scheduleOrphanedAppReaper() {
+    if (!orphanedAppDirsCleanupEnabled) {
+      LOG.info("Cleanup of orphaned application directories is disabled; set "
+          + YarnConfiguration.NM_ORPHANED_APP_DIRS_CLEANUP_ENABLED
+          + " to true to enable it");
+      return;
+    }
+    OrphanedAppReaper reaper = new OrphanedAppReaper(nmContext, dispatcher,
+        dirsHandler, lfs, orphanedAppDirsMinAge,
+        orphanedAppDirsMaxPerInterval, createAppDirReowner());
+    cacheCleanup.scheduleWithFixedDelay(reaper, orphanedAppDirsCleanupPeriod,
+        orphanedAppDirsCleanupPeriod, TimeUnit.MILLISECONDS);
+    LOG.info("Cleanup of orphaned application directories is enabled, scanning"
+        + " every {} ms for application directories unmodified for at least"
+        + " {} ms, at most {} applications per scan",
+        orphanedAppDirsCleanupPeriod, orphanedAppDirsMinAge,
+        orphanedAppDirsMaxPerInterval);
+  }
+
+  /**
+   * The helper that makes an orphaned application's directories deletable by
+   * the application user, or {@link AppDirReowner#NOOP} when none is
+   * configured.
+   *
+   * Without a helper, applications whose directories contain root-owned content
+   * - from dockerd re-creating a missing bind-mount source, or from a container
+   * process running as root writing to a bind-mounted host directory - are
+   * never collected, because deletion runs as the application user.
+   */
+  @VisibleForTesting
+  AppDirReowner createAppDirReowner() {
+    if (orphanedAppDirsReownCommand == null
+        || orphanedAppDirsReownCommand.isEmpty()) {
+      LOG.info("No re-own helper configured ({} is unset), so orphaned"
+          + " application directories containing root-owned content will not be"
+          + " collected", YarnConfiguration.NM_ORPHANED_APP_DIRS_REOWN_COMMAND);
+      return AppDirReowner.NOOP;
+    }
+    if (!new File(orphanedAppDirsReownCommand).isAbsolute()) {
+      // sudoers names an absolute path, so a relative one can only ever be
+      // refused by sudo - once per application, on every scan.
+      LOG.error("{} must be an absolute path but is '{}'; the re-own helper is"
+          + " disabled, so orphaned application directories containing"
+          + " root-owned content will not be collected",
+          YarnConfiguration.NM_ORPHANED_APP_DIRS_REOWN_COMMAND,
+          orphanedAppDirsReownCommand);
+      return AppDirReowner.NOOP;
+    }
+    if (!new File(orphanedAppDirsReownCommand).exists()) {
+      // Deliberately not a check on executability: the helper is deployed
+      // 0700 root:root, so the NodeManager user cannot execute it directly -
+      // sudo is the only route in, and that is the point.
+      LOG.warn("The configured re-own helper {} does not exist on this node;"
+          + " every re-own attempt will fail until it is deployed. Verify with"
+          + " {}-verify-setup.", orphanedAppDirsReownCommand,
+          orphanedAppDirsReownCommand);
+    }
+    LOG.info("Orphaned application directories will be made deletable with {},"
+        + " timing out after {} ms", orphanedAppDirsReownCommand,
+        orphanedAppDirsReownTimeout);
+    return new AppDirReowner.SudoAppDirReowner(orphanedAppDirsReownCommand,
+        orphanedAppDirsReownTimeout);
   }
 
   LocalizerTracker createLocalizerTracker(Configuration conf) {
