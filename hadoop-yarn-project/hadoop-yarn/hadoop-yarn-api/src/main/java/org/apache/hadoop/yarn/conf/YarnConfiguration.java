@@ -1376,6 +1376,74 @@ public class YarnConfiguration extends Configuration {
     NM_PREFIX + "localizer.cache.target-size-mb";
   public static final long DEFAULT_NM_LOCALIZER_CACHE_TARGET_SIZE_MB = 10 * 1024;
   
+  /**
+   * Whether the NodeManager reaps application directories left behind by
+   * applications it no longer tracks. Because
+   * {@link #NM_LOCALIZER_CACHE_TARGET_SIZE_MB} excludes resources with
+   * APPLICATION visibility, such directories are never size-capped and are
+   * unreachable by any other cleanup path once the application has been
+   * removed from the NodeManager's application map.
+   */
+  public static final String NM_ORPHANED_APP_DIRS_CLEANUP_ENABLED =
+    NM_PREFIX + "orphaned-app-dirs.cleanup.enabled";
+  public static final boolean DEFAULT_NM_ORPHANED_APP_DIRS_CLEANUP_ENABLED =
+    false;
+
+  /** Interval in between scans for orphaned application directories. */
+  public static final String NM_ORPHANED_APP_DIRS_CLEANUP_INTERVAL_MS =
+    NM_PREFIX + "orphaned-app-dirs.cleanup.interval-ms";
+  public static final long DEFAULT_NM_ORPHANED_APP_DIRS_CLEANUP_INTERVAL_MS =
+    60 * 60 * 1000;
+
+  /**
+   * Minimum age of an application directory before it may be considered
+   * orphaned, measured from its modification time - in practice when its last
+   * container work directory was created or removed. Guards against reaping a
+   * directory that the NodeManager was still using as the scan ran.
+   */
+  public static final String NM_ORPHANED_APP_DIRS_MIN_AGE_MS =
+    NM_PREFIX + "orphaned-app-dirs.min-age-ms";
+  public static final long DEFAULT_NM_ORPHANED_APP_DIRS_MIN_AGE_MS =
+    6 * 60 * 60 * 1000;
+
+  /**
+   * Maximum number of orphaned applications reaped per scan, so that a first
+   * run on a badly-leaked node cannot produce a deletion storm.
+   */
+  public static final String NM_ORPHANED_APP_DIRS_MAX_PER_INTERVAL =
+    NM_PREFIX + "orphaned-app-dirs.max-per-interval";
+  public static final int DEFAULT_NM_ORPHANED_APP_DIRS_MAX_PER_INTERVAL = 50;
+
+  /**
+   * Absolute path of a privileged helper, run through {@code sudo}, that
+   * restores ownership of an orphaned application's local directories so the
+   * NodeManager can delete them as the application user.
+   *
+   * Such directories can contain {@code root}-owned content at any depth -
+   * created by dockerd re-creating a missing bind-mount source, or by a process
+   * running as root inside a container writing to a bind-mounted host directory
+   * - which the delete-as-user path can never remove. When no helper is
+   * configured those applications are simply not collected.
+   *
+   * The helper receives only a user name and an application id, and derives
+   * every path itself from a root-owned configuration. Its ownership, mode and
+   * sudoers rule are security requirements; see the deployment section of
+   * ORPHANED_APPCACHE_CONFLUENCE.md and verify a node with
+   * {@code yarn-reown-orphan-app-dir-verify-setup} before enabling it.
+   */
+  public static final String NM_ORPHANED_APP_DIRS_REOWN_COMMAND =
+    NM_PREFIX + "orphaned-app-dirs.reown.command";
+  public static final String DEFAULT_NM_ORPHANED_APP_DIRS_REOWN_COMMAND = "";
+
+  /**
+   * Timeout for a single invocation of the re-own helper. The scan runs on the
+   * cache-cleanup scheduler, so an unbounded call would stall cache cleanup.
+   */
+  public static final String NM_ORPHANED_APP_DIRS_REOWN_TIMEOUT_MS =
+    NM_PREFIX + "orphaned-app-dirs.reown.timeout-ms";
+  public static final long DEFAULT_NM_ORPHANED_APP_DIRS_REOWN_TIMEOUT_MS =
+    60 * 1000;
+
   /** Number of threads to handle localization requests.*/
   public static final String NM_LOCALIZER_CLIENT_THREAD_COUNT =
     NM_PREFIX + "localizer.client.thread-count";
