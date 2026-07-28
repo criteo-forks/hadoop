@@ -1,0 +1,661 @@
+#!/bin/bash
+#
+# Absolute interpreter path, deliberately not /usr/bin/env bash: env resolves
+# the interpreter through PATH, and sudo only guarantees a root-controlled PATH
+# when secure_path is configured in sudoers. An absolute shebang removes that
+# dependency entirely (E6/E10).
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+###############################################################################
+#
+# Re-owns root-owned content under an orphaned YARN application directory so
+# that the NodeManager's normal delete-as-user path can remove it.
+#
+# Invoked by OrphanedAppReaper through sudo:
+#
+#     sudo -n /usr/libexec/hadoop-yarn/yarn-reown-orphan-app-dir <user> <app_id>
+#
+# WHY THIS EXISTS
+#
+# Two things create root-owned content under usercache/<user>/appcache/<app>:
+#
+#   1. dockerd re-creating a missing bind-mount source. Every container gets
+#      <local-dir>/usercache/<user>/appcache/<app_id> bind-mounted read-write;
+#      when that source is gone at container start, dockerd does mkdir(0755) +
+#      chown(0,0). Under the setgid appcache parent this yields 2755 root:root
+#      on the application directory itself.
+#   2. A root process *inside* a container writing to a bind-mounted host
+#      directory, typically <container>/private_slash_tmp (the container's
+#      /tmp). container-executor deliberately clears setgid on that directory,
+#      so root-created children get group root: 0755 root:root, at ARBITRARY
+#      DEPTH under a tree whose top-level directory is owned correctly.
+#
+# Deletion runs as the application user, which cannot unlink children of a
+# directory it has no write bit on, so those trees are undeletable and the
+# reaper re-selects them forever.
+#
+# WHAT THIS SCRIPT CAN DO, AT MOST
+#
+# chown entries *currently owned by root* to <validated-user>:<nm-group>, under
+# two derived paths per local dir. It never deletes, never creates, never writes
+# file content, and never changes modes. No filesystem path is accepted from
+# argv.
+#
+# It only ever runs against an application the NodeManager no longer tracks
+# whose directories have been idle for yarn.nodemanager.orphaned-app-dirs.
+# min-age-ms (default 6h), so no live container process is racing it.
+#
+# CONFIGURATION
+#
+# Every setting is read from
+#
+#     <directory holding this script>/yarn-reown-orphan-app-dir.conf
+#
+# as KEY=value lines. All four keys are mandatory:
+#
+#     YARN_SITE          absolute path of the yarn-site.xml to read
+#                        yarn.nodemanager.local-dirs from
+#     NM_GROUP_FALLBACK  group to chown to when the per-user cache directory is
+#                        gone and its group can no longer be read
+#     MIN_UID            lowest uid this script accepts as <user>
+#     BANNED_USERS       colon-separated users it refuses as <user>
+#
+# There is deliberately no built-in default, and no fixed /etc location. A
+# default yarn-site.xml path makes the script read a file nobody pointed it at,
+# and a default MIN_UID or BANNED_USERS silently applies a policy that can
+# disagree with container-executor.cfg. A missing file, a missing key or an
+# empty value is a hard error (65), never a fallback. Keeping the file next to
+# the script also means a deployment copies one directory and templates nothing.
+#
+# THREAT MODEL
+#
+# E1  The application user owns appcache/, so it can swap application_X for a
+#     symlink to /etc between the reaper's decision and this chown.
+#     -> chown -R defaults to -P and does not descend a symlink given as its
+#        argument; -h makes it act on the link inode. Plus an explicit -L test.
+# E2  Root-in-container plants symlinks deep in the tree (it controls
+#     private_slash_tmp).
+#     -> fts FTS_PHYSICAL never dereferences; only the link inode is chowned,
+#        which is inert (symlink ownership only matters for sticky-dir unlink).
+# E3  Root-in-container hardlinks a root-owned file from elsewhere on the same
+#     device into the tree.
+#     -> RESIDUAL, ACCEPTED. Bounded to root-owned files on the same filesystem
+#        reachable through that container's own bind mounts, and --from=0
+#        limits the effect to files that are already root-owned. The
+#        application is dead and idle for min-age-ms before we act.
+#        The group is deliberately not constrained: a root process inside the
+#        container can chgrp anything it hardlinks in, so filtering on it would
+#        stop no attacker while skipping the benign root:<nm-group> entries a
+#        setgid parent produces.
+# E4  A leftover bind mount or tmpfs under the tree, so chown -R crosses into a
+#     live filesystem (chown has no --one-file-system).
+#     -> any tree containing a mount point per /proc/self/mountinfo is refused.
+# E5  yarn rewrites yarn.nodemanager.local-dirs in yarn-site.xml to redirect
+#     the chown at an arbitrary tree, or edits the configuration file that says
+#     which yarn-site.xml to read.
+#     -> both files, and every one of their ancestors, must be root-owned and
+#        not group/other-writable before they are read. Abort otherwise.
+# E6  yarn replaces this script, or the configuration file beside it, which sudo
+#     reads and executes as root.
+#     -> deploy both to a root-owned, non-yarn-writable directory
+#        (/usr/libexec/hadoop-yarn), root:root, mode 0700 for the script and
+#        0600 for the configuration file, enforced by packaging. See
+#        ORPHANED_APPCACHE_CONFLUENCE.md.
+# E7  Path traversal or injection through <user> / <app_id>.
+#     -> both regex-validated before use; no path comes from argv, and sudo
+#        passes argv rather than a shell string.
+# E8  Chowning a live application's directories.
+#     -> enforced by the caller, not here: OrphanedAppReaper only selects
+#        applications absent from getApplications() and idle for min-age-ms,
+#        and re-owns before it registers the synthetic application.
+# E9  A root-owned setuid binary in the tree becomes setuid-app-user.
+#     -> Linux clears S_ISUID/S_ISGID on chown of a non-directory.
+# E10 Environment manipulation through sudo.
+#     -> env_reset is sudo's default; PATH is pinned below; the configuration
+#        location is never taken from the environment. It is derived from the
+#        path sudo actually executed, which the sudoers command spec pins, and
+#        the file itself is then subject to the E5 ownership check.
+#
+# Exit codes: 0 success (including "nothing to do"), 64 argument validation,
+# 65 missing, incomplete or untrusted configuration, 66 chown failure, 67 no
+# local directory could be processed at all - which must never be reported as
+# success, because the caller would then push the application through a cleanup
+# chain that reports success without checking that anything was deleted.
+#
+###############################################################################
+
+set -euo pipefail
+IFS=$'\n\t'
+
+# Pinned: nothing from the caller's environment is trusted.
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+# Stable diagnostics, so the "changed ownership" count below cannot be broken
+# by the invoking locale.
+LC_ALL=C
+export LC_ALL
+
+readonly EX_OK=0
+readonly EX_USAGE=64
+readonly EX_UNTRUSTED_CONFIG=65
+readonly EX_CHOWN_FAILED=66
+readonly EX_NOTHING_PROCESSED=67
+
+readonly PROG=yarn-reown-orphan-app-dir
+
+# Resolved from this script's own location by resolve_conf_file(), rather than
+# hard-coded under /etc: the deployment directory is already root-owned and
+# non-yarn-writable (E6), so the file needs no second location with its own
+# ownership requirements, and a deployment templates nothing. Deliberately NOT
+# taken from the environment - anything sudo lets through is caller-controlled
+# (E10).
+CONF_FILE=""
+
+# Every setting comes from CONF_FILE; see CONFIGURATION above for why none of
+# these has a built-in default. Empty here means "not configured yet", and
+# load_conf() refuses to return without all four set.
+YARN_SITE=""
+NM_GROUP_FALLBACK=""
+MIN_UID=""
+BANNED_USERS=""
+
+# An array rather than a space-separated string: IFS is newline+tab globally, so
+# a string would not word-split here.
+readonly REQUIRED_KEYS=(YARN_SITE NM_GROUP_FALLBACK MIN_UID BANNED_USERS)
+
+log()  { printf '%s: %s\n' "$PROG" "$*" >&2; }
+fail() { log "ERROR: $*"; }
+
+# What was done to a tree, on STDOUT. Hadoop's Shell.ShellCommandExecutor only
+# exposes stdout through getOutput(); stderr reaches the NodeManager log solely
+# as the message of the ExitCodeException thrown on a non-zero exit. Anything
+# an operator should see on a *successful* run therefore has to go here.
+report() { printf '%s: %s\n' "$PROG" "$*"; }
+
+# Set by require_root_owned to the fully resolved path it validated, so callers
+# can read exactly what was checked rather than re-resolving it.
+RESOLVED_PATH=""
+
+usage() {
+  cat >&2 <<EOF
+$PROG <user> <app_id>
+
+Re-owns root-owned content under an orphaned YARN application directory to
+<user>, so the NodeManager can delete it as that user. Run through sudo by
+the NodeManager; see ORPHANED_APPCACHE_CONFLUENCE.md before deploying.
+
+Every setting is read from $PROG.conf in this script's own
+directory, which is required: YARN_SITE, NM_GROUP_FALLBACK, MIN_UID and
+BANNED_USERS must all be set there. There are no built-in defaults.
+EOF
+}
+
+#
+# Requires that PATH is root-owned and not group/other-writable, and that the
+# same holds for every one of its ancestors. Mirrors is_only_root_writable() /
+# check_configuration_permissions() in container-executor's configuration.c.
+#
+require_root_owned() {
+  local path=$1 cur uid mode depth=0
+
+  # Resolve symlinks before walking. The walk is textual (dirname), and stat
+  # does not dereference, so a symlinked ancestor - /etc/hadoop/conf pointing at
+  # a versioned or alternatives-managed directory is a common layout - would be
+  # stat'd as the link itself, whose 0777 mode always trips the writability test
+  # below, while the real ancestors went unchecked. Resolving first makes the
+  # check both meaningful and survivable on those layouts.
+  if ! RESOLVED_PATH=$(realpath -e -- "$path" 2>/dev/null); then
+    fail "cannot resolve $path (is realpath installed, and does the path exist?)"
+    return 1
+  fi
+  cur=$RESOLVED_PATH
+  while :; do
+    # A resolved absolute path always reaches / in a bounded number of steps;
+    # the guard is here so that a surprise can never hang the NodeManager's
+    # cache-cleanup thread behind sudo.
+    if (( ++depth > 64 )); then
+      fail "giving up walking the ancestors of $RESOLVED_PATH"
+      return 1
+    fi
+    # IFS is newline+tab globally, so split this space-separated pair locally.
+    if ! IFS=' ' read -r uid mode < <(stat -c '%u %a' "$cur" 2>/dev/null); then
+      fail "cannot stat $cur"
+      return 1
+    fi
+    if [[ $uid -ne 0 ]]; then
+      fail "$cur is owned by uid $uid, expected root (0)"
+      return 1
+    fi
+    # Reject any group or other write bit. %a is octal, so mask 0022.
+    if (( (0$mode & 0022) != 0 )); then
+      fail "$cur is group- or other-writable (mode $mode)"
+      return 1
+    fi
+    [[ $cur == / ]] && break
+    cur=$(dirname "$cur")
+  done
+  return 0
+}
+
+#
+# Derives the configuration file location from this script's own path. sudo
+# execve()s the absolute path named by the sudoers command spec, so $0 - and
+# therefore BASH_SOURCE[0] - is that pinned path, not something the caller
+# chose. Even if it were, load_conf() puts the result through
+# require_root_owned() before reading a byte of it.
+#
+# The basename is fixed: renaming or symlinking the script does not rename its
+# configuration, so the two cannot silently drift apart.
+#
+resolve_conf_file() {
+  local self dir
+  if ! self=$(realpath -e -- "${BASH_SOURCE[0]}" 2>/dev/null); then
+    fail "cannot resolve the path of this script (${BASH_SOURCE[0]});" \
+         "is realpath installed?"
+    return 1
+  fi
+  dir=$(dirname -- "$self")
+  CONF_FILE=$dir/$PROG.conf
+  return 0
+}
+
+#
+# Reads KEY=value lines from the root-owned configuration file, accepting only a
+# fixed set of keys, all of which are required. Parsed rather than sourced, so
+# the file cannot execute code even if its permissions are later relaxed.
+#
+load_conf() {
+  if [[ ! -e $CONF_FILE ]]; then
+    fail "$CONF_FILE does not exist. Every setting comes from it and there are" \
+         "no built-in defaults; deploy it next to this script with YARN_SITE," \
+         "NM_GROUP_FALLBACK, MIN_UID and BANNED_USERS set"
+    return 1
+  fi
+
+  if ! require_root_owned "$CONF_FILE"; then
+    fail "refusing to read untrusted configuration file $CONF_FILE"
+    return 1
+  fi
+
+  local line key value
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
+    # Whitespace around the key and the = is accepted and dropped, as it is in
+    # container-executor.cfg. Only the value is taken literally.
+    if [[ ! $line =~ ^[[:space:]]*([A-Z_]+)[[:space:]]*=(.*)$ ]]; then
+      fail "malformed line in $CONF_FILE: '$line'"
+      return 1
+    fi
+    key=${BASH_REMATCH[1]}
+    value=${BASH_REMATCH[2]}
+    # Trim surrounding whitespace, which includes the CR of a file saved with
+    # CRLF endings. A trailing space is invisible in an editor and in every
+    # message printed below, so leaving it in turns a correct path into an
+    # inexplicable "does not exist" - and a templating tool emits one easily.
+    value=${value#"${value%%[![:space:]]*}"}
+    value=${value%"${value##*[![:space:]]}"}
+    # Nothing is unquoted here: the file is parsed rather than sourced, so
+    # quotes would become part of the value. Say that, rather than failing later
+    # on a path that reads correctly in the message.
+    if [[ ( $value == \"*\" || $value == \'*\' ) && ${#value} -ge 2 ]]; then
+      fail "value of $key in $CONF_FILE is wrapped in quotes: $value." \
+           "This file is parsed, not sourced; write the value unquoted"
+      return 1
+    fi
+    case $key in
+      YARN_SITE|NM_GROUP_FALLBACK|MIN_UID|BANNED_USERS)
+        # printf -v assigns without eval, so the file cannot execute code.
+        printf -v "$key" '%s' "$value"
+        ;;
+      *)
+        fail "unknown key in $CONF_FILE: $key"
+        return 1
+        ;;
+    esac
+  done < "$CONF_FILE"
+
+  # An incomplete file must not fall back to a guess: a missing YARN_SITE would
+  # otherwise decide nothing, while a missing MIN_UID or BANNED_USERS would
+  # decide which users this script accepts.
+  for key in "${REQUIRED_KEYS[@]}"; do
+    if [[ -z ${!key} ]]; then
+      fail "$key is not set in $CONF_FILE"
+      return 1
+    fi
+  done
+  return 0
+}
+
+#
+# Extracts a property value from yarn-site.xml. xmllint is required rather than
+# regex-parsing XML; absence is a hard failure.
+#
+# normalize-space() on the name so that a <name> written across several lines -
+# which Hadoop's own parser accepts - still matches here, and on the value so
+# that the surrounding newlines of a pretty-printed file do not reach the path
+# checks below. [1] so a property defined twice resolves to the first definition
+# rather than to the empty string. verify-setup carries the same expression.
+#
+xml_property() {
+  local key=$1
+  xmllint --xpath \
+    "normalize-space((/configuration/property[normalize-space(name)='$key']/value)[1])" \
+    "$YARN_SITE" 2>/dev/null
+}
+
+#
+# True when no mount point sits at DIR or anywhere below it. chown has no
+# --one-file-system, so a leftover bind mount or tmpfs would otherwise be
+# walked into (E4). Field 5 of mountinfo is the mount point.
+#
+has_no_mount_point_below() {
+  local dir=$1
+  # No END rule: an exit with an expression inside END replaces the status set
+  # by the exit 1 below, which would make this always report "no mount point".
+  # awk exits 0 on its own when no record matches.
+  #
+  # The kernel octal-escapes space, tab, newline and backslash in the mount
+  # point, so unescape before comparing. Backslash last, or the others would be
+  # decoded a second time.
+  awk -v d="$dir" '
+    {
+      mp = $5
+      gsub(/\\040/, " ",    mp)
+      gsub(/\\011/, "\t",   mp)
+      gsub(/\\012/, "\n",   mp)
+      gsub(/\\134/, "\\\\", mp)
+      if (mp == d || index(mp, d "/") == 1) { exit 1 }
+    }
+  ' /proc/self/mountinfo
+}
+
+#
+# chown -Rh --from=0 DIR, with every pre-condition checked first. Returns 0
+# when the directory was handled or deliberately skipped, 1 on chown failure.
+#
+reown_tree() {
+  local dir=$1 owner_spec=$2 what=$3
+  local out changed
+
+  # E1/E2: tested before -e, so a broken symlink is reported as a symlink
+  # rather than as a missing directory. Never act on one, whatever it targets.
+  if [[ -L $dir ]]; then
+    report "SKIP $what $dir: it is a symlink"
+    return 0
+  fi
+  if [[ ! -e $dir ]]; then
+    report "$what $dir does not exist, nothing to do"
+    return 0
+  fi
+  if [[ ! -d $dir ]]; then
+    report "SKIP $what $dir: not a directory"
+    return 0
+  fi
+  # E4: treated as a failure, not a skip. The tree stays undeletable, so the
+  # caller must not proceed to register the application for cleanup, and the
+  # reown-failure metric has to surface it for an operator to look at.
+  if ! has_no_mount_point_below "$dir"; then
+    fail "$what $dir: a mount point exists at or below it, refusing to chown" \
+         "across a filesystem boundary"
+    return 1
+  fi
+
+  # --from=0 is the only filter: it re-owns entries owned by root at any depth
+  # and cannot re-target anything else. The group is left unconstrained on
+  # purpose - a root process writing under a directory that still carries the
+  # setgid bit produces root:<nm-group>, and --from=0:0 would silently skip
+  # exactly those while stopping no attacker (E3). -R defaults to -P (no symlink
+  # traversal); -h acts on link inodes rather than their targets.
+  if ! out=$(chown -Rh --from=0 -c "$owner_spec" -- "$dir" 2>&1); then
+    fail "chown failed under $dir: $out"
+    return 1
+  fi
+  changed=$(printf '%s\n' "$out" | grep -c '^changed ownership' || true)
+  if (( changed > 0 )); then
+    report "re-owned $changed root-owned entries under $what $dir to $owner_spec"
+  else
+    report "no root-owned entries under $what $dir"
+  fi
+  return 0
+}
+
+main() {
+  if [[ ${1:-} == -h || ${1:-} == --help ]]; then
+    usage
+    return $EX_OK
+  fi
+  if [[ $# -ne 2 ]]; then
+    usage
+    return $EX_USAGE
+  fi
+
+  local user=$1 app_id=$2
+
+  # E7: validate before anything else. There is no app-id validator in
+  # container-executor to reuse - validate_container_id covers container ids
+  # only - so this regex is the whole check.
+  if [[ ! $app_id =~ ^application_[0-9]{1,20}_[0-9]{1,10}$ ]]; then
+    fail "not a valid application id: '$app_id'"
+    return $EX_USAGE
+  fi
+  # Deliberately permissive about the shape of the name, and strict about the
+  # characters that matter: <user> is only ever used as one path component, so
+  # what has to be excluded is '/', whitespace and control characters, a leading
+  # '-' that a command could read as an option, and '.' / '..' as a whole name.
+  # Everything else is left to getent below, which is the authority on whether
+  # the account exists - container-executor takes the same position and calls
+  # getpwnam without pattern-matching the name at all. A tighter regex only
+  # breaks real accounts: firstname.lastname is the common LDAP shape, machine
+  # accounts end in '$', and an AD-derived name can carry '@'.
+  # Single-quoted, and matched through the variable: bash expands the right-hand
+  # side of =~ before matching, so a literal '$-' in the pattern would expand to
+  # the shell's option flags and quietly change the character class.
+  local user_re='^[A-Za-z0-9_][A-Za-z0-9._@$-]*$'
+  if [[ ! $user =~ $user_re ]]; then
+    fail "not a valid user name: '$user'"
+    return $EX_USAGE
+  fi
+
+  resolve_conf_file || return $EX_UNTRUSTED_CONFIG
+  load_conf || return $EX_UNTRUSTED_CONFIG
+
+  # MIN_UID reaches an arithmetic context below, where bash expands array
+  # subscripts. The configuration file is root-owned, so this is not an
+  # escalation, but a typo should not turn into an evaluated expression.
+  if [[ ! $MIN_UID =~ ^[0-9]+$ ]]; then
+    fail "MIN_UID in $CONF_FILE is not a number: '$MIN_UID'"
+    return $EX_UNTRUSTED_CONFIG
+  fi
+  if [[ $YARN_SITE != /* ]]; then
+    fail "YARN_SITE in $CONF_FILE is not an absolute path: '$YARN_SITE'"
+    return $EX_UNTRUSTED_CONFIG
+  fi
+
+  # OrphanedAppReaper passes the NodeManager's own user for an application that
+  # has nothing left but an nmPrivate directory. That user is banned below, by
+  # design, so recognise it here instead of failing every such application
+  # forever. Only the nmPrivate tree is then processed, which grants nothing
+  # new - nmPrivate is re-owned to the invoking uid on every call, whatever
+  # <user> is - whereas re-owning usercache/<invoking-user> would point the
+  # helper at a tree the caller itself controls. sudo sets SUDO_USER; it is not
+  # caller-supplied.
+  local nm_private_only=0
+  if [[ -n ${SUDO_USER:-} && $user == "$SUDO_USER" ]]; then
+    nm_private_only=1
+  fi
+
+  if (( ! nm_private_only )); then
+    # Mirrors check_user() in container-executor.c: reject system users and
+    # anything below min.user.id. Note that container-executor reads both
+    # min.user.id and banned.users from container-executor.cfg, and honours an
+    # allowed.system.users whitelist that bypasses the uid floor; this script
+    # has its own MIN_UID and BANNED_USERS instead, so a cluster that tunes any
+    # of those must mirror the change in CONF_FILE.
+    local pw_uid
+    if ! pw_uid=$(getent passwd "$user" | cut -d: -f3) \
+        || [[ -z ${pw_uid:-} ]]; then
+      fail "unknown user: $user"
+      return $EX_USAGE
+    fi
+    if (( pw_uid < MIN_UID )); then
+      fail "refusing user $user: uid $pw_uid is below the minimum of $MIN_UID"
+      return $EX_USAGE
+    fi
+    local banned
+    # The || [[ -n ... ]] guard matters: tr leaves no trailing newline, so a
+    # bare read would drop the last entry of the list.
+    while IFS= read -r banned || [[ -n $banned ]]; do
+      if [[ $user == "$banned" ]]; then
+        fail "refusing banned user: $user"
+        return $EX_USAGE
+      fi
+    done < <(printf '%s' "$BANNED_USERS" | tr ':' '\n')
+  fi
+
+  # E5: the configuration decides which trees get chowned, so it must not be
+  # writable by the account that invokes this script.
+  if [[ ! -f $YARN_SITE ]]; then
+    # Quoted: the value comes from a file an operator edited, and an unquoted
+    # message hides a stray character in it.
+    fail "YARN_SITE '$YARN_SITE' from $CONF_FILE does not exist"
+    return $EX_UNTRUSTED_CONFIG
+  fi
+  if ! require_root_owned "$YARN_SITE"; then
+    fail "refusing to read untrusted $YARN_SITE; fix its ownership rather" \
+         "than weakening this check"
+    return $EX_UNTRUSTED_CONFIG
+  fi
+  # Read exactly what was validated, rather than re-resolving the symlinks.
+  YARN_SITE=$RESOLVED_PATH
+  if ! command -v xmllint >/dev/null 2>&1; then
+    fail "xmllint is required (package libxml2) and was not found"
+    return $EX_UNTRUSTED_CONFIG
+  fi
+
+  local local_dirs_raw
+  local_dirs_raw=$(xml_property yarn.nodemanager.local-dirs || true)
+  if [[ -z ${local_dirs_raw//[[:space:]]/} ]]; then
+    # Also the message for a yarn-site.xml that does not parse: xml_property
+    # cannot tell the two apart, since a property may legitimately be absent.
+    fail "yarn.nodemanager.local-dirs is not set in $YARN_SITE, or $YARN_SITE" \
+         "does not parse; check with: xmllint --noout $YARN_SITE"
+    return $EX_UNTRUSTED_CONFIG
+  fi
+
+  # nmPrivate is deleted in-process as the NodeManager user, not as the
+  # application user, so it has to be re-owned to whoever invoked us. sudo
+  # sets SUDO_UID itself; it is not caller-supplied.
+  local nm_uid=${SUDO_UID:-}
+  if [[ ! ${nm_uid:-} =~ ^[0-9]+$ ]] || [[ $nm_uid -eq 0 ]]; then
+    nm_uid=""
+  fi
+
+  local rc=$EX_OK
+  local processed=0
+  local local_dir user_cache app_dir nm_private_dir nm_group
+  # The || [[ -n ... ]] guard matters: tr leaves no trailing newline, so a bare
+  # read drops the last entry - and on the usual single-local-dir node that is
+  # every entry, leaving the script a silent no-op that still exits 0.
+  while IFS= read -r local_dir || [[ -n $local_dir ]]; do
+    # Trim surrounding whitespace only. Deleting it everywhere would silently
+    # mangle a path that contains some, rather than rejecting it below.
+    local_dir=${local_dir#"${local_dir%%[![:space:]]*}"}
+    local_dir=${local_dir%"${local_dir##*[![:space:]]}"}
+    [[ -z $local_dir ]] && continue
+    # local-dirs may be configured as file:// URIs.
+    local_dir=${local_dir#file://}
+    if [[ $local_dir == *'${'* ]]; then
+      # yarn-site.xml is read directly here, so Hadoop's ${...} property
+      # references are never expanded. Silently skipping would look identical
+      # to "nothing to do".
+      fail "SKIP local dir '$local_dir': it contains an unexpanded property" \
+           "reference, which this script cannot resolve"
+      rc=$EX_UNTRUSTED_CONFIG
+      continue
+    fi
+    if [[ $local_dir != /* ]]; then
+      fail "SKIP local dir '$local_dir': not an absolute path"
+      rc=$EX_UNTRUSTED_CONFIG
+      continue
+    fi
+    if [[ $local_dir == *[[:space:]]* ]]; then
+      fail "SKIP local dir '$local_dir': it contains whitespace"
+      rc=$EX_UNTRUSTED_CONFIG
+      continue
+    fi
+    if [[ $local_dir == */../* || $local_dir == */.. ]]; then
+      fail "SKIP local dir '$local_dir': contains a '..' component"
+      rc=$EX_UNTRUSTED_CONFIG
+      continue
+    fi
+    if [[ ! -d $local_dir || -L $local_dir ]]; then
+      log "SKIP local dir '$local_dir': not a directory on this node"
+      continue
+    fi
+    processed=$((processed + 1))
+
+    user_cache=$local_dir/usercache/$user
+    app_dir=$user_cache/appcache/$app_id
+    nm_private_dir=$local_dir/nmPrivate/$app_id
+
+    # The NodeManager group, as established by create_directory_for_user() on
+    # the per-user cache directory. Falls back to the configured default when
+    # that directory is gone.
+    if ! nm_group=$(stat -c '%G' "$user_cache" 2>/dev/null) \
+        || [[ -z ${nm_group:-} || $nm_group == UNKNOWN ]]; then
+      nm_group=$NM_GROUP_FALLBACK
+    fi
+    if ! getent group "$nm_group" >/dev/null 2>&1; then
+      fail "SKIP $local_dir: group '$nm_group' does not exist"
+      rc=$EX_CHOWN_FAILED
+      continue
+    fi
+
+    if (( ! nm_private_only )); then
+      reown_tree "$app_dir" "$user:$nm_group" appcache || rc=$EX_CHOWN_FAILED
+    fi
+
+    if [[ -n $nm_uid ]]; then
+      reown_tree "$nm_private_dir" "$nm_uid:$nm_group" nmPrivate \
+        || rc=$EX_CHOWN_FAILED
+    else
+      local owner
+      if owner=$(stat -c '%u' "$local_dir/nmPrivate" 2>/dev/null) \
+          && [[ $owner != 0 ]]; then
+        reown_tree "$nm_private_dir" "$owner:$nm_group" nmPrivate \
+          || rc=$EX_CHOWN_FAILED
+      else
+        fail "SKIP nmPrivate under $local_dir: cannot determine the" \
+             "NodeManager user (SUDO_UID unset)"
+        rc=$EX_CHOWN_FAILED
+      fi
+    fi
+  done < <(printf '%s' "$local_dirs_raw" | tr ',' '\n')
+
+  # "Nothing to do" and "nothing was even attempted" must not look alike to the
+  # caller: it treats success as a licence to push the application through a
+  # cleanup chain that never checks whether the files went away.
+  if (( processed == 0 )); then
+    fail "no usable directory among the yarn.nodemanager.local-dirs entries" \
+         "of $YARN_SITE, so nothing was re-owned"
+    return $EX_NOTHING_PROCESSED
+  fi
+
+  return $rc
+}
+
+main "$@"

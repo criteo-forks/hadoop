@@ -1,0 +1,765 @@
+#!/bin/bash
+#
+# Licensed to the Apache Software Foundation (ASF) under one or more
+# contributor license agreements.  See the NOTICE file distributed with
+# this work for additional information regarding copyright ownership.
+# The ASF licenses this file to You under the Apache License, Version 2.0
+# (the "License"); you may not use this file except in compliance with
+# the License.  You may obtain a copy of the License at
+#
+#     http://www.apache.org/licenses/LICENSE-2.0
+#
+# Unless required by applicable law or agreed to in writing, software
+# distributed under the License is distributed on an "AS IS" BASIS,
+# WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+# See the License for the specific language governing permissions and
+# limitations under the License.
+#
+###############################################################################
+#
+# Verifies that yarn-reown-orphan-app-dir is deployed correctly, before the
+# NodeManager is configured to use it.
+#
+# READ-ONLY. This script checks and reports; it never changes ownership,
+# permissions, configuration or any file. It is safe to run at any time on a
+# production node, and safe to re-run.
+#
+# Run as root:
+#
+#     /usr/libexec/hadoop-yarn/yarn-reown-orphan-app-dir-verify-setup \
+#       --nm-user yarn
+#
+# Exits 0 only when every check passed, so it can gate a puppet run or a canary
+# rollout. Each FAIL is followed by its remediation.
+#
+# WHERE IT LOOKS
+#
+# This script expects to be deployed in the same directory as the re-own script
+# and its configuration file, and derives both paths from its own location. That
+# way a site that deploys somewhere other than /usr/libexec/hadoop-yarn never
+# has to edit or template this file - which matters, because this is the file
+# that gates the rollout, so it should stay byte-identical to what was reviewed.
+#
+# yarn-site.xml is deliberately not defaulted either: the re-own script reads
+# the one named by YARN_SITE in its configuration file, so that is where this
+# script reads it from too. Checking a different yarn-site.xml than the one the
+# helper will actually read is exactly the silent failure this script exists to
+# catch. --nm-user has no default for the same reason: guessing "yarn" would
+# make every sudo check below vacuous on a cluster that runs the NodeManager as
+# something else.
+#
+###############################################################################
+
+set -uo pipefail
+
+PATH=/usr/sbin:/usr/bin:/sbin:/bin
+export PATH
+LC_ALL=C
+export LC_ALL
+
+readonly PROG=yarn-reown-orphan-app-dir-verify-setup
+
+readonly REOWN_PROG=yarn-reown-orphan-app-dir
+
+# Note that -e is deliberately not set in this script - a failed check must not
+# abort the run - so this failure is handled by hand.
+if ! SELF=$(realpath -e -- "${BASH_SOURCE[0]}" 2>/dev/null); then
+  printf 'FAIL  cannot resolve the path of this script (%s)\n' "${BASH_SOURCE[0]}"
+  printf '      -> install realpath (package coreutils); every path below is\n'
+  printf "         derived from this script's own location\n"
+  exit 1
+fi
+readonly SELF_DIR=$(dirname -- "$SELF")
+
+# Derived from this script's own location, not hard-coded, so that this file
+# never needs editing at deploy time. --script overrides it, and the
+# configuration file follows whatever --script names.
+REOWN_SCRIPT=$SELF_DIR/$REOWN_PROG
+# Fixed: sudo reads drop-ins from /etc/sudoers.d and nowhere else.
+SUDOERS_FILE=/etc/sudoers.d/$REOWN_PROG
+# Empty until the option loop and the configuration file have been read.
+CONF_FILE=""
+YARN_SITE=""
+YARN_SITE_SOURCE=""
+NM_USER=""
+DO_SCAN=0
+# Read out of the configuration file in section 5 and used by the smoke test in
+# section 10, which has to filter probe users the way the helper does. Declared
+# here because section 5 may never reach its parse loop (set -u).
+conf_yarn_site=""
+conf_min_uid=""
+conf_banned=""
+
+# Same keys, and same "all of them are required", as the re-own script.
+readonly REQUIRED_KEYS=(YARN_SITE NM_GROUP_FALLBACK MIN_UID BANNED_USERS)
+
+fails=0
+warns=0
+
+pass() { printf 'PASS  %s\n' "$*"; }
+warn() { printf 'WARN  %s\n' "$*"; warns=$((warns + 1)); }
+info() { printf 'INFO  %s\n' "$*"; }
+fail() {
+  printf 'FAIL  %s\n' "$1"
+  shift
+  # Remediation, indented under the failure it belongs to.
+  local line
+  for line in "$@"; do
+    printf '      -> %s\n' "$line"
+  done
+  fails=$((fails + 1))
+}
+
+usage() {
+  cat <<EOF
+$PROG [options]
+
+Verifies the deployment of yarn-reown-orphan-app-dir. Read-only: never changes
+anything, safe to re-run on a production node. Must run as root, because it
+reads the 0440 sudoers file and the 0700 re-own script.
+
+Required:
+  --nm-user USER     the account the NodeManager actually runs as. No default:
+                     guessing it would make every sudo check below vacuous on a
+                     cluster that runs the NodeManager as something else.
+
+Options:
+  --script PATH      re-own script to verify
+                     (default $REOWN_SCRIPT,
+                     i.e. this script's own directory)
+  --conf PATH        configuration file to verify
+                     (default $REOWN_PROG.conf next to --script)
+  --sudoers PATH     sudoers drop-in to verify (default $SUDOERS_FILE)
+  --yarn-site PATH   yarn-site.xml to verify. Defaults to whatever YARN_SITE
+                     says in the configuration file, which is what the re-own
+                     script itself reads; pass this only for an ad-hoc check.
+  --scan             additionally count root-owned entries under each local
+                     dir. Walks the disks, so it is opt-in.
+  -h, --help         this message
+
+Exit status: 0 when every check passed, 1 otherwise.
+EOF
+}
+
+conf_from_option=0
+while [[ $# -gt 0 ]]; do
+  case $1 in
+    --script)    REOWN_SCRIPT=${2:?--script needs a value}; shift 2 ;;
+    --conf)      CONF_FILE=${2:?--conf needs a value}; conf_from_option=1; shift 2 ;;
+    --sudoers)   SUDOERS_FILE=${2:?--sudoers needs a value}; shift 2 ;;
+    --yarn-site) YARN_SITE=${2:?--yarn-site needs a value}
+                 YARN_SITE_SOURCE="--yarn-site"; shift 2 ;;
+    --nm-user)   NM_USER=${2:?--nm-user needs a value}; shift 2 ;;
+    --scan)      DO_SCAN=1; shift ;;
+    -h|--help)   usage; exit 0 ;;
+    *)           printf '%s: unknown option: %s\n' "$PROG" "$1" >&2
+                 usage >&2
+                 exit 1 ;;
+  esac
+done
+
+# The configuration file is defined as living beside the re-own script, so
+# --script drags it along rather than silently leaving it pointing elsewhere.
+if [[ $conf_from_option -eq 0 ]]; then
+  CONF_FILE=$(dirname -- "$REOWN_SCRIPT")/$REOWN_PROG.conf
+fi
+
+# Checked before anything else: the sudoers rule, the user checks and both
+# end-to-end smoke tests are all about this account, so a run without it would
+# report a green that means nothing.
+if [[ -z $NM_USER ]]; then
+  printf 'FAIL  --nm-user is required\n'
+  printf '      -> pass the account the NodeManager actually runs as, e.g.\n'
+  printf '         %s --nm-user yarn\n' "$PROG"
+  printf '      -> it has no default because a wrong guess turns the sudoers,\n'
+  printf '         user and end-to-end checks into vacuous passes\n'
+  printf '\n%s: 1 check FAILED. Do not enable the feature yet.\n' "$PROG"
+  exit 1
+fi
+
+#
+# Checks PATH and every ancestor are root-owned with no group/other write bit.
+# Prints the first offender. Same rule the re-own script applies to its own
+# configuration, and the same rule container-executor applies to its cfg.
+#
+first_untrusted_ancestor() {
+  local cur uid mode depth=0
+  # Resolve symlinks first, exactly as the re-own script does, so that the two
+  # agree on a layout where a path component is a link.
+  if ! cur=$(realpath -e -- "$1" 2>/dev/null); then
+    printf '%s (cannot resolve)' "$1"
+    return 1
+  fi
+  while :; do
+    if (( ++depth > 64 )); then
+      printf '%s (ancestor walk too deep)' "$cur"
+      return 1
+    fi
+    if ! IFS=' ' read -r uid mode < <(stat -c '%u %a' "$cur" 2>/dev/null); then
+      printf '%s (cannot stat)' "$cur"
+      return 1
+    fi
+    if [[ $uid -ne 0 ]] || (( (0$mode & 0022) != 0 )); then
+      printf '%s (uid %s mode %s)' "$cur" "$uid" "$mode"
+      return 1
+    fi
+    [[ $cur == / ]] && break
+    cur=$(dirname "$cur")
+  done
+  return 0
+}
+
+# Extracts a property value from yarn-site.xml. Must stay identical to the
+# re-own script's version: reading the property differently than the helper does
+# is the silent failure this script exists to catch.
+#
+# normalize-space() on the name so that a <name> written across several lines -
+# which Hadoop's own parser accepts - still matches, and on the value so that a
+# comparison like reown.command below is not defeated by the surrounding
+# newlines of a pretty-printed file. [1] so a property defined twice resolves to
+# the first definition rather than to the empty string.
+xml_property() {
+  local key=$1
+  xmllint --xpath \
+    "normalize-space((/configuration/property[normalize-space(name)='$key']/value)[1])" \
+    "$YARN_SITE" 2>/dev/null
+}
+
+printf '%s: verifying yarn-reown-orphan-app-dir deployment (read-only)\n\n' \
+  "$PROG"
+
+# --- 1. running as root ------------------------------------------------------
+if [[ $(id -u) -ne 0 ]]; then
+  printf 'FAIL  must run as root\n'
+  printf '      -> the 0440 sudoers file and the 0700 re-own script are not\n'
+  printf '         readable otherwise; re-run with sudo\n'
+  exit 1
+fi
+pass "running as root"
+
+# --- 2. the re-own script ---------------------------------------------------
+if [[ -L $REOWN_SCRIPT ]]; then
+  fail "$REOWN_SCRIPT is a symlink" \
+    "install the real file; a symlink means the target's ownership decides" \
+    "what sudo executes as root"
+elif [[ ! -f $REOWN_SCRIPT ]]; then
+  fail "$REOWN_SCRIPT does not exist" \
+    "install it from hadoop-yarn/bin/yarn-reown-orphan-app-dir" \
+    "or pass --script with the path you deployed"
+else
+  script_owner=$(stat -c '%u:%g' "$REOWN_SCRIPT" 2>/dev/null)
+  script_mode=$(stat -c '%a' "$REOWN_SCRIPT" 2>/dev/null)
+  if [[ $script_owner != "0:0" ]]; then
+    fail "$REOWN_SCRIPT is owned by $script_owner, expected 0:0" \
+      "chown root:root $REOWN_SCRIPT" \
+      "write access for anyone but root is arbitrary root code execution"
+  else
+    pass "$REOWN_SCRIPT is owned by root:root"
+  fi
+  if [[ $script_mode != "700" ]]; then
+    if (( (0$script_mode & 0022) != 0 )); then
+      fail "$REOWN_SCRIPT is group- or other-writable (mode $script_mode)" \
+        "chmod 0700 $REOWN_SCRIPT" \
+        "this is a root escalation, not a style issue"
+    else
+      warn "$REOWN_SCRIPT is mode $script_mode, expected 700 (not writable," \
+           "so not a hole, but stricter is documented)"
+    fi
+  else
+    pass "$REOWN_SCRIPT is mode 700"
+  fi
+fi
+
+# --- 3. ancestors of the script ---------------------------------------------
+if offender=$(first_untrusted_ancestor "$(dirname "$REOWN_SCRIPT")"); then
+  pass "every ancestor of $REOWN_SCRIPT is root-owned and not group/other-writable"
+else
+  fail "an ancestor of $REOWN_SCRIPT is not trusted: $offender" \
+    "a writable ancestor lets the script be replaced wholesale" \
+    "do not deploy under \$HADOOP_HOME/bin, which is usually $NM_USER-owned"
+fi
+
+# --- 4. sudoers -------------------------------------------------------------
+if [[ ! -f $SUDOERS_FILE ]]; then
+  fail "$SUDOERS_FILE does not exist" \
+    "create it with: $NM_USER ALL=(root) NOPASSWD: $REOWN_SCRIPT" \
+    "then validate with visudo -cf $SUDOERS_FILE"
+else
+  sudoers_owner=$(stat -c '%u:%g' "$SUDOERS_FILE" 2>/dev/null)
+  sudoers_mode=$(stat -c '%a' "$SUDOERS_FILE" 2>/dev/null)
+  if [[ $sudoers_owner == "0:0" && $sudoers_mode == "440" ]]; then
+    pass "$SUDOERS_FILE is root:root mode 440"
+  else
+    fail "$SUDOERS_FILE is $sudoers_owner mode $sudoers_mode, expected 0:0 440" \
+      "chown root:root $SUDOERS_FILE && chmod 0440 $SUDOERS_FILE"
+  fi
+  if visudo -cf "$SUDOERS_FILE" >/dev/null 2>&1; then
+    pass "$SUDOERS_FILE parses (visudo -cf)"
+  else
+    fail "$SUDOERS_FILE does not parse" \
+      "run visudo -cf $SUDOERS_FILE to see the error" \
+      "a broken drop-in can break sudo for every user on the node"
+  fi
+fi
+
+if grep -Eq '^[[:space:]]*#includedir[[:space:]]+/etc/sudoers\.d' /etc/sudoers \
+   2>/dev/null; then
+  pass "/etc/sudoers includes /etc/sudoers.d"
+else
+  fail "/etc/sudoers does not include /etc/sudoers.d" \
+    "add: #includedir /etc/sudoers.d" \
+    "without it the drop-in above is never read"
+fi
+
+if sudo_rules=$(sudo -l -U "$NM_USER" 2>/dev/null); then
+  if printf '%s' "$sudo_rules" | grep -Fq "$REOWN_SCRIPT"; then
+    if printf '%s' "$sudo_rules" | grep -F "$REOWN_SCRIPT" \
+        | grep -q 'NOPASSWD'; then
+      pass "$NM_USER may run $REOWN_SCRIPT as root with NOPASSWD"
+    else
+      fail "$NM_USER may run $REOWN_SCRIPT but not with NOPASSWD" \
+        "the NodeManager has no tty and cannot answer a password prompt" \
+        "add NOPASSWD: to the rule"
+    fi
+  else
+    fail "sudo does not resolve $REOWN_SCRIPT for $NM_USER" \
+      "check the path in $SUDOERS_FILE matches $REOWN_SCRIPT exactly" \
+      "sudo -l -U $NM_USER shows what it does resolve"
+  fi
+else
+  warn "sudo -l -U $NM_USER failed; cannot confirm the rule resolves"
+fi
+
+if grep -rqs 'secure_path' /etc/sudoers /etc/sudoers.d 2>/dev/null; then
+  pass "sudo has secure_path configured"
+else
+  warn "sudo has no secure_path; not exploitable here because the scripts use" \
+       "an absolute shebang and pin PATH themselves, but setting it is" \
+       "recommended"
+fi
+
+# --- 5. the configuration file ----------------------------------------------
+# It is mandatory and it names every path the re-own script uses, so it is
+# checked before yarn-site.xml: YARN_SITE is read from here unless --yarn-site
+# was given. Parsed, never sourced, exactly as the re-own script does it.
+if [[ ! -e $CONF_FILE ]]; then
+  fail "$CONF_FILE does not exist" \
+    "deploy it next to $REOWN_SCRIPT with all of" \
+    "${REQUIRED_KEYS[*]} set as KEY=value lines" \
+    "there are no built-in defaults: without it the re-own script exits 65 for" \
+    "every application and orphanedAppDirsReownFailures climbs"
+elif ! offender=$(first_untrusted_ancestor "$CONF_FILE"); then
+  fail "$CONF_FILE is not trusted: $offender" \
+    "the re-own script refuses to read it and exits 65 for every application" \
+    "chown root:root $CONF_FILE && chmod 0600 $CONF_FILE" \
+    "it decides which trees get chowned as root, so write access for any other" \
+    "account is a root escalation"
+else
+  pass "$CONF_FILE and its ancestors are root-owned, not group/other-writable"
+  conf_mode=$(stat -c '%a' "$CONF_FILE" 2>/dev/null)
+  if [[ $conf_mode != "600" ]]; then
+    warn "$CONF_FILE is mode $conf_mode, expected 600 (not writable, so not a" \
+         "hole, but stricter is documented)"
+  else
+    pass "$CONF_FILE is mode 600"
+  fi
+
+  # Same accepted-key rules as the re-own script's load_conf(). A key it
+  # rejects means it exits 65 before it does any work, so an unknown or
+  # malformed key is a FAIL here rather than a WARN.
+  conf_seen=""
+  conf_ok=1
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
+    if [[ ! $line =~ ^[[:space:]]*([A-Z_]+)[[:space:]]*=(.*)$ ]]; then
+      fail "malformed line in $CONF_FILE: '$line'" \
+        "the re-own script rejects it and exits 65; only KEY=value, blank and" \
+        "# comment lines are accepted"
+      conf_ok=0
+      continue
+    fi
+    key=${BASH_REMATCH[1]}
+    value=${BASH_REMATCH[2]}
+    # Same trim as the re-own script's load_conf(), and reported: a trailing
+    # space is invisible everywhere else, so an operator who left one deserves
+    # to hear about it from the script whose job is to find that kind of thing.
+    raw_value=$value
+    value=${value#"${value%%[![:space:]]*}"}
+    value=${value%"${value##*[![:space:]]}"}
+    if [[ $value != "$raw_value" ]]; then
+      warn "$key in $CONF_FILE has surrounding whitespace: '$raw_value'" \
+           "both scripts trim it, so this is not a fault; a value saved with" \
+           "CRLF endings or a trailing space is worth cleaning up anyway"
+    fi
+    if [[ ( $value == \"*\" || $value == \'*\' ) && ${#value} -ge 2 ]]; then
+      fail "$key in $CONF_FILE is wrapped in quotes: $value" \
+        "the re-own script parses this file rather than sourcing it, so the" \
+        "quotes become part of the value and it exits 65; write it unquoted"
+      conf_ok=0
+      continue
+    fi
+    case $key in
+      YARN_SITE|NM_GROUP_FALLBACK|MIN_UID|BANNED_USERS)
+        [[ -n $value ]] && conf_seen="$conf_seen $key"
+        # Kept, rather than only counted: section 6 needs YARN_SITE, and the
+        # smoke test needs the other two to filter probe users the way the
+        # helper does.
+        case $key in
+          YARN_SITE)     conf_yarn_site=$value ;;
+          MIN_UID)       conf_min_uid=$value ;;
+          BANNED_USERS)  conf_banned=$value ;;
+        esac
+        ;;
+      *)
+        fail "unknown key in $CONF_FILE: $key" \
+          "the re-own script rejects it and exits 65; accepted keys are" \
+          "${REQUIRED_KEYS[*]}"
+        conf_ok=0
+        ;;
+    esac
+  done < "$CONF_FILE"
+
+  missing_keys=""
+  for key in "${REQUIRED_KEYS[@]}"; do
+    [[ $conf_seen == *" $key"* ]] || missing_keys="$missing_keys $key"
+  done
+  if [[ -n $missing_keys ]]; then
+    fail "$CONF_FILE is incomplete, unset or empty:${missing_keys}" \
+      "every key is required and has no built-in default; the re-own script" \
+      "exits 65 until all of ${REQUIRED_KEYS[*]} are set"
+  elif [[ $conf_ok -eq 1 ]]; then
+    pass "$CONF_FILE sets all of ${REQUIRED_KEYS[*]}"
+  fi
+
+  if [[ -z $YARN_SITE && -n $conf_yarn_site ]]; then
+    YARN_SITE=$conf_yarn_site
+    YARN_SITE_SOURCE="YARN_SITE in $CONF_FILE"
+  fi
+fi
+
+# Which yarn-site.xml is about to be checked, and why that one. Checking a
+# different file than the one the helper will read is the silent failure this
+# script exists to catch, so it is stated rather than implied.
+if [[ -n $YARN_SITE ]]; then
+  info "verifying yarn-site.xml $YARN_SITE (from $YARN_SITE_SOURCE)"
+fi
+
+# --- 6. yarn-site.xml and local dirs ----------------------------------------
+# Why the local dir list ended up empty, when it does. Every failure here leaves
+# it empty, and section 10 can then only report "no local dirs are known" - a
+# message that sends the reader grepping yarn-site.xml even when the actual
+# cause was the configuration file two sections up. Carrying the reason along
+# keeps the last check pointing at the first failure.
+local_dirs_why=""
+# Referenced by section 10 whether or not the loop below runs (set -u).
+present=0
+missing=0
+rejected=0
+
+if [[ -z $YARN_SITE ]]; then
+  fail "no yarn-site.xml to verify" \
+    "set YARN_SITE in $CONF_FILE, which is where the re-own script reads it" \
+    "from, or pass --yarn-site for an ad-hoc check" \
+    "every check that depends on it is skipped below"
+  local_dirs_why="YARN_SITE is not set, because $CONF_FILE is missing, untrusted or incomplete"
+elif [[ ! -f $YARN_SITE ]]; then
+  # Quoted, and the length given: the value was typed into a file by hand, and
+  # an unquoted message renders a stray character in it invisible - which is
+  # exactly the case where the operator goes and checks that the file is there.
+  fail "yarn-site.xml '$YARN_SITE' does not exist (from $YARN_SITE_SOURCE," \
+    "${#YARN_SITE} characters)" \
+    "fix YARN_SITE in $CONF_FILE, or pass --yarn-site" \
+    "if the path looks right, compare that length with the real one:" \
+    "ls -l '$YARN_SITE'"
+  local_dirs_why="yarn-site.xml '$YARN_SITE' does not exist"
+else
+  if offender=$(first_untrusted_ancestor "$YARN_SITE"); then
+    pass "$YARN_SITE and its ancestors are root-owned, not group/other-writable"
+  else
+    fail "$YARN_SITE is not trusted: $offender" \
+      "the re-own script REFUSES to read it, so the feature will not work" \
+      "fix the ownership (chown root:root, chmod g-w,o-w); do not weaken the check" \
+      "this is the check most likely to fail on a first deployment"
+  fi
+fi
+
+if command -v xmllint >/dev/null 2>&1; then
+  pass "xmllint is present"
+else
+  fail "xmllint not found" \
+    "install libxml2; the re-own script aborts rather than regex-parsing XML"
+fi
+
+if command -v realpath >/dev/null 2>&1; then
+  pass "realpath is present"
+else
+  fail "realpath not found" \
+    "install coreutils; the re-own script resolves its own directory to find" \
+    "$REOWN_PROG.conf, and resolves every configuration path before checking" \
+    "that its ancestors are root-owned"
+fi
+
+local_dirs_raw=""
+if [[ -n $YARN_SITE && -f $YARN_SITE ]] && command -v xmllint >/dev/null 2>&1; then
+  local_dirs_raw=$(xml_property yarn.nodemanager.local-dirs)
+  if [[ -z ${local_dirs_raw//[[:space:]]/} ]]; then
+    # grep finding the property in the file while the XPath finds nothing is the
+    # confusing case these two branches exist to tell apart. Usually the
+    # document does not parse at all, and xmllint's own diagnostic - which
+    # xml_property has to discard, because a property may legitimately be
+    # absent - is the only thing that says where.
+    if ! xml_error=$(xmllint --noout "$YARN_SITE" 2>&1); then
+      fail "$YARN_SITE does not parse as XML, so no property could be read" \
+        "xmllint: ${xml_error%%$'\n'*}" \
+        "the re-own script reads it with the same parser and exits 65, even" \
+        "though grep still finds the property in the file" \
+        "run: xmllint --noout $YARN_SITE"
+      local_dirs_why="$YARN_SITE does not parse as XML"
+    else
+      fail "yarn.nodemanager.local-dirs is not set in $YARN_SITE" \
+        "the re-own script derives every path from it and cannot run without it" \
+        "it has to be a <property> directly under <configuration>; a match that" \
+        "grep finds can also sit in a comment, or in a file pulled in by" \
+        "xi:include, which neither script expands"
+      local_dirs_why="yarn.nodemanager.local-dirs is not set in $YARN_SITE"
+    fi
+  else
+    # tr leaves no trailing newline, so without the || [[ -n ... ]] guard the
+    # last entry - the only one on a single-local-dir node - is never seen.
+    while IFS= read -r d || [[ -n $d ]]; do
+      # Trim surrounding whitespace only, exactly as the re-own script does.
+      # Deleting it everywhere would hide an entry that the helper rejects.
+      d=${d#"${d%%[![:space:]]*}"}
+      d=${d%"${d##*[![:space:]]}"}
+      [[ -z $d ]] && continue
+      d=${d#file://}
+      # The entries the re-own script refuses outright. They have to be checked
+      # here too: -d alone would report an unexpanded ${...} reference as a
+      # missing directory, and a symlinked local dir as a perfectly good one -
+      # a green run for a list the helper will not process.
+      if [[ $d == *'${'* ]]; then
+        fail "local dir '$d' contains an unexpanded \${...} property reference" \
+          "the re-own script reads yarn-site.xml directly, so Hadoop's property" \
+          "references are never expanded, and it exits 65" \
+          "write the path out in full in $YARN_SITE"
+        rejected=$((rejected + 1))
+      elif [[ $d != /* ]]; then
+        fail "local dir '$d' is not an absolute path" \
+          "the re-own script refuses it and exits 65"
+        rejected=$((rejected + 1))
+      elif [[ $d == *[[:space:]]* ]]; then
+        fail "local dir '$d' contains whitespace" \
+          "the re-own script refuses it and exits 65"
+        rejected=$((rejected + 1))
+      elif [[ $d == */../* || $d == */.. ]]; then
+        fail "local dir '$d' contains a '..' component" \
+          "the re-own script refuses it and exits 65"
+        rejected=$((rejected + 1))
+      elif [[ -L $d ]]; then
+        fail "local dir $d is a symlink" \
+          "the re-own script skips symlinked local dirs, so this one is never" \
+          "processed; with no other usable entry it exits 67 for every" \
+          "application" \
+          "point yarn.nodemanager.local-dirs at the real directory"
+        rejected=$((rejected + 1))
+      elif [[ -d $d ]]; then
+        info "local dir $d"
+        present=$((present + 1))
+      else
+        warn "local dir $d from $YARN_SITE is not a directory on this node"
+        missing=$((missing + 1))
+      fi
+    done < <(printf '%s' "$local_dirs_raw" | tr ',' '\n')
+    if [[ $present -eq 0 ]]; then
+      fail "no usable yarn.nodemanager.local-dirs entry on this node" \
+        "the re-own script has nothing to work on and exits 67"
+    elif [[ $missing -eq 0 && $rejected -eq 0 ]]; then
+      pass "every yarn.nodemanager.local-dirs entry exists and is usable"
+    fi
+  fi
+elif [[ -z $local_dirs_why ]]; then
+  # yarn-site.xml is fine, so the only way to get here is a missing xmllint,
+  # already reported above.
+  local_dirs_why="xmllint is not installed"
+fi
+
+# --- 7/8. the NodeManager user ----------------------------------------------
+if nm_uid=$(getent passwd "$NM_USER" | cut -d: -f3) && [[ -n ${nm_uid:-} ]]; then
+  pass "NodeManager user $NM_USER resolves to uid $nm_uid"
+  if [[ $nm_uid -eq 0 ]]; then
+    fail "$NM_USER is uid 0" \
+      "the re-own script uses SUDO_UID to re-own nmPrivate and rejects 0" \
+      "the NodeManager must not run as root"
+  fi
+else
+  fail "NodeManager user $NM_USER does not resolve" \
+    "pass --nm-user with the account the NodeManager actually runs as"
+fi
+
+# --- 9. the NodeManager configuration ---------------------------------------
+if [[ -f $YARN_SITE ]] && command -v xmllint >/dev/null 2>&1; then
+  configured=$(xml_property yarn.nodemanager.orphaned-app-dirs.reown.command)
+  enabled=$(xml_property yarn.nodemanager.orphaned-app-dirs.cleanup.enabled)
+  if [[ -z ${configured//[[:space:]]/} ]]; then
+    info "yarn.nodemanager.orphaned-app-dirs.reown.command is unset:" \
+         "re-owning is off, root-owned trees will not be collected"
+  elif [[ $configured == "$REOWN_SCRIPT" ]]; then
+    pass "yarn.nodemanager.orphaned-app-dirs.reown.command matches $REOWN_SCRIPT"
+  else
+    fail "reown.command does not match the script being verified" \
+      "configured: $configured" \
+      "verified:   $REOWN_SCRIPT" \
+      "a mismatch here is the likeliest silent failure of this feature"
+  fi
+  if [[ ${enabled//[[:space:]]/} != "true" ]]; then
+    info "yarn.nodemanager.orphaned-app-dirs.cleanup.enabled is not true:" \
+         "the reaper itself is off, so nothing will call the script"
+  fi
+fi
+
+# --- 10. functional smoke test through the real sudo path -------------------
+# Non-mutating: the first call passes no arguments, the second an application id
+# that cannot exist. Neither touches a real directory.
+if [[ -x $REOWN_SCRIPT ]]; then
+  # The helper's own stderr is kept rather than discarded: it names the reason
+  # already, so printing it beats telling the reader to re-run the command by
+  # hand. 2>&1 >/dev/null keeps stderr and drops the report on stdout.
+  rc=0
+  err=$(sudo -u "$NM_USER" sudo -n "$REOWN_SCRIPT" 2>&1 >/dev/null) || rc=$?
+  # One -> line per line of output, so a multi-line reason stays readable under
+  # the failure it belongs to.
+  mapfile -t err_lines <<< "${err:-no output}"
+  if [[ $rc -eq 64 ]]; then
+    pass "sudo path works: no-argument call was rejected with exit 64"
+  elif [[ $rc -eq 1 ]]; then
+    fail "sudo refused to run the script as $NM_USER (exit 1)" \
+      "${err_lines[@]}" \
+      "check the sudoers rule and that the NodeManager user is $NM_USER"
+  else
+    fail "unexpected exit $rc from the no-argument smoke test (expected 64)" \
+      "${err_lines[@]}"
+  fi
+
+  # A probe user the helper would refuse produces a FAIL that says nothing about
+  # the deployment, so candidates are filtered the way the helper filters them -
+  # banned, below MIN_UID, or unresolvable - and the next one is tried instead.
+  # usercache is full of such names: an account that has since been deleted, or
+  # one that is banned on purpose.
+  probe_user=""
+  fallback_user=""
+  skipped_users=""
+  while IFS= read -r d || [[ -n $d ]]; do
+    d=${d#"${d%%[![:space:]]*}"}
+    d=${d%"${d##*[![:space:]]}"}
+    [[ -z $d ]] && continue
+    d=${d#file://}
+    [[ -d $d/usercache ]] || continue
+    for candidate in "$d"/usercache/*; do
+      [[ -d $candidate ]] || continue
+      candidate_user=$(basename "$candidate")
+      # The NodeManager's own account is in BANNED_USERS by design, yet the
+      # helper accepts it - it is what the reaper passes for an application that
+      # has nothing left but an nmPrivate directory, and only that tree is then
+      # processed. Kept as a last resort rather than skipped, so a node whose
+      # usercache holds nothing else still gets the whole path exercised.
+      if [[ $candidate_user == "$NM_USER" ]]; then
+        fallback_user=$candidate_user
+        continue
+      fi
+      candidate_uid=$(getent passwd "$candidate_user" | cut -d: -f3)
+      if [[ -z ${candidate_uid:-} ]]; then
+        skipped_users="$skipped_users $candidate_user(does not resolve)"
+        continue
+      fi
+      if [[ -n $conf_min_uid && $conf_min_uid =~ ^[0-9]+$ ]] \
+          && (( candidate_uid < conf_min_uid )); then
+        skipped_users="$skipped_users $candidate_user(uid $candidate_uid < MIN_UID)"
+        continue
+      fi
+      if [[ ":$conf_banned:" == *":$candidate_user:"* ]]; then
+        skipped_users="$skipped_users $candidate_user(in BANNED_USERS)"
+        continue
+      fi
+      probe_user=$candidate_user
+      break
+    done
+    [[ -n $probe_user ]] && break
+  done < <(printf '%s' "${local_dirs_raw:-}" | tr ',' '\n')
+
+  if [[ -z $probe_user && -n $fallback_user ]]; then
+    probe_user=$fallback_user
+    info "no ordinary user in usercache; probing with the NodeManager's own" \
+         "account $probe_user, which exercises the nmPrivate path only"
+  fi
+
+  if [[ -n $skipped_users ]]; then
+    info "probe candidates the helper would refuse, skipped:$skipped_users"
+  fi
+
+  if [[ -n $probe_user ]]; then
+    rc=0
+    err=$(sudo -u "$NM_USER" sudo -n "$REOWN_SCRIPT" "$probe_user" \
+      application_0_0 2>&1 >/dev/null) || rc=$?
+    mapfile -t err_lines <<< "${err:-no output}"
+    if [[ $rc -eq 0 ]]; then
+      pass "end-to-end call for $probe_user/application_0_0 succeeded" \
+           "(nothing to do, no directory touched)"
+    else
+      fail "end-to-end call exited $rc for $probe_user application_0_0" \
+        "${err_lines[@]}" \
+        "65 = missing, incomplete or untrusted configuration, 67 = no usable" \
+        "local dir, 64 = the user or application id was rejected, 1 = sudo" \
+        "refused" \
+        "to reproduce: sudo -u $NM_USER sudo -n $REOWN_SCRIPT $probe_user" \
+        "application_0_0"
+    fi
+  elif [[ -z ${local_dirs_raw//[[:space:]]/} ]]; then
+    # Same severity as below: without this call nothing has exercised the whole
+    # path, whatever the reason. The reason itself comes from section 6, because
+    # the cause is usually not the local dirs at all - and a bare "no local dirs
+    # are known" sends the reader grepping yarn-site.xml for a property that is
+    # already there.
+    fail "no local dirs are known, so the end-to-end call could not be made" \
+      "cause: ${local_dirs_why:-unknown}" \
+      "fix that first; nothing below the local dir list can be checked without" \
+      "it, and this is the only check that exercises the whole path"
+  elif [[ $present -eq 0 ]]; then
+    fail "no usable local dir, so the end-to-end call could not be made" \
+      "see the yarn.nodemanager.local-dirs failures above; the re-own script" \
+      "would exit 67 here"
+  else
+    # Not a warning: this is the only check that exercises the whole path, and
+    # a green run without it is exactly how a broken deployment slips through.
+    fail "no usercache/<user> directory found, so the end-to-end call could not be made" \
+      "this is the check that catches a misdeployment; the others test the parts, not the path" \
+      "re-run on a node that has actually run containers, then enable the feature"
+  fi
+else
+  warn "$REOWN_SCRIPT is not executable by root, skipping the smoke tests"
+fi
+
+# --- 11. optional backlog scan ----------------------------------------------
+if [[ $DO_SCAN -eq 1 && -n ${local_dirs_raw:-} ]]; then
+  while IFS= read -r d || [[ -n $d ]]; do
+    d=${d//[[:space:]]/}
+    [[ -z $d ]] && continue
+    d=${d#file://}
+    for sub in usercache nmPrivate; do
+      [[ -d $d/$sub ]] || continue
+      # -uid 0 with no -gid: the re-own script filters on the owner alone.
+      count=$(find "$d/$sub" -uid 0 2>/dev/null | wc -l | tr -d ' ')
+      info "$d/$sub contains $count root-owned entries"
+    done
+  done < <(printf '%s' "$local_dirs_raw" | tr ',' '\n')
+elif [[ $DO_SCAN -eq 1 ]]; then
+  warn "--scan requested but no local dirs are known"
+fi
+
+printf '\n'
+if [[ $fails -gt 0 ]]; then
+  printf '%s: %d check(s) FAILED, %d warning(s). Do not enable the feature yet.\n' \
+    "$PROG" "$fails" "$warns"
+  exit 1
+fi
+printf '%s: all checks passed, %d warning(s).\n' "$PROG" "$warns"
+exit 0

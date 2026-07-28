@@ -26,6 +26,8 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ConcurrentMap;
 
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.yarn.api.records.ApplicationAccessType;
@@ -489,6 +491,95 @@ public class TestApplication {
     }
   }
 
+  /**
+   * An application the NodeManager no longer tracks, revived by the
+   * OrphanedAppReaper solely to clean up its local directories, must reach the
+   * cleanup state straight from NEW, run the regular cleanup chain and then
+   * remove itself again - without ever being initialized or persisted.
+   */
+  @Test
+  @SuppressWarnings("unchecked")
+  public void testOrphanedAppCleanup() {
+    WrappedApplication wa = null;
+    try {
+      wa = new WrappedApplication(6, 314159265358979L, "yak", 0);
+      // No initApplication(): the reaper never resurrects a dead application
+      // through INIT_APPLICATION.
+      assertEquals(ApplicationState.NEW, wa.app.getApplicationState());
+
+      wa.registerWithContext();
+      wa.cleanupOrphanedApp();
+
+      assertEquals(ApplicationState.APPLICATION_RESOURCES_CLEANINGUP,
+          wa.app.getApplicationState());
+      verify(wa.localizerBus).handle(
+          refEq(new ApplicationLocalizationEvent(
+              LocalizationEventType.DESTROY_APPLICATION_RESOURCES, wa.app),
+              "timestamp"));
+      verify(wa.auxBus).handle(
+          refEq(new AuxServicesEvent(
+              AuxServicesEventType.APPLICATION_STOP, wa.appId)));
+
+      wa.appResourcesCleanedup();
+      assertEquals(ApplicationState.FINISHED, wa.app.getApplicationState());
+      // Still tracked: it only leaves the map once log handling has answered.
+      assertEquals(1, wa.applications.size());
+
+      // Both log handlers answer APPLICATION_LOG_HANDLING_FAILED for an
+      // application they never saw, which is what closes the chain.
+      wa.appLogHandlingFailed();
+      Assert.assertTrue("Orphaned application was not removed from the "
+          + "applications map", wa.applications.isEmpty());
+
+      // The application was never initialized, so log aggregation was never
+      // started for it and nothing was written to the state store - a crash
+      // mid-sequence therefore leaves no zombie behind.
+      verify(wa.logAggregationBus, never()).handle(
+          argThat(new LogHandlerEventTypeMatcher(
+              LogHandlerEventType.APPLICATION_STARTED)));
+      verify(wa.localizerBus, never()).handle(
+          argThat(new LocalizationEventTypeMatcher(
+              LocalizationEventType.INIT_APPLICATION_RESOURCES)));
+      verify(wa.stateStoreService, never()).storeApplication(
+          any(ApplicationId.class),
+          any(ContainerManagerApplicationProto.class));
+    } catch (IOException e) {
+      throw new AssertionError(e);
+    } finally {
+      if (wa != null) {
+        wa.finished();
+      }
+    }
+  }
+
+  private static class LogHandlerEventTypeMatcher
+      implements ArgumentMatcher<LogHandlerEvent> {
+    private final LogHandlerEventType type;
+
+    LogHandlerEventTypeMatcher(LogHandlerEventType type) {
+      this.type = type;
+    }
+
+    @Override
+    public boolean matches(LogHandlerEvent argument) {
+      return argument != null && type.equals(argument.getType());
+    }
+  }
+
+  private static class LocalizationEventTypeMatcher
+      implements ArgumentMatcher<LocalizationEvent> {
+    private final LocalizationEventType type;
+
+    LocalizationEventTypeMatcher(LocalizationEventType type) {
+      this.type = type;
+    }
+
+    @Override
+    public boolean matches(LocalizationEvent argument) {
+      return argument != null && type.equals(argument.getType());
+    }
+  }
+
   private class ContainerKillMatcher implements
       ArgumentMatcher<ContainerEvent> {
     private ContainerId cId;
@@ -542,6 +633,7 @@ public class TestApplication {
     final NMStateStoreService stateStoreService;
     final ApplicationId appId;
     final Application app;
+    final ConcurrentMap<ApplicationId, Application> applications;
 
     WrappedApplication(int id, long timestamp, String user, int numContainers) {
       Configuration conf = new Configuration();
@@ -576,6 +668,8 @@ public class TestApplication {
       when(context.getNMTokenSecretManager()).thenReturn(nmTokenSecretMgr);
       when(context.getNMStateStore()).thenReturn(stateStoreService);
       when(context.getConf()).thenReturn(conf);
+      applications = new ConcurrentHashMap<ApplicationId, Application>();
+      when(context.getApplications()).thenReturn(applications);
 
       // Setting master key
       MasterKey masterKey = new MasterKeyPBImpl();
@@ -660,6 +754,26 @@ public class TestApplication {
     public void appResourcesCleanedup() {
       app.handle(new ApplicationEvent(appId,
           ApplicationEventType.APPLICATION_RESOURCES_CLEANEDUP));
+      drainDispatcherEvents();
+    }
+
+    /**
+     * Mirrors what the OrphanedAppReaper does before dispatching: the
+     * application must be in the map, since events are routed through it.
+     */
+    public void registerWithContext() {
+      applications.put(appId, app);
+    }
+
+    public void cleanupOrphanedApp() {
+      app.handle(new ApplicationEvent(appId,
+          ApplicationEventType.CLEANUP_ORPHANED_APPLICATION));
+      drainDispatcherEvents();
+    }
+
+    public void appLogHandlingFailed() {
+      app.handle(new ApplicationEvent(appId,
+          ApplicationEventType.APPLICATION_LOG_HANDLING_FAILED));
       drainDispatcherEvents();
     }
     

@@ -226,6 +226,10 @@ public class ApplicationImpl implements Application {
            .addTransition(ApplicationState.NEW, ApplicationState.NEW,
                ApplicationEventType.INIT_CONTAINER,
                INIT_CONTAINER_TRANSITION)
+           .addTransition(ApplicationState.NEW,
+               ApplicationState.APPLICATION_RESOURCES_CLEANINGUP,
+               ApplicationEventType.CLEANUP_ORPHANED_APPLICATION,
+               new OrphanedAppCleanupTransition())
 
            // Transitions from INITING state
            .addTransition(ApplicationState.INITING, ApplicationState.INITING,
@@ -527,6 +531,31 @@ public class ApplicationImpl implements Application {
         new AuxServicesEvent(AuxServicesEventType.APPLICATION_STOP, appId));
 
     // TODO: Trigger the LogsManager
+  }
+
+  /**
+   * Cleans up an application that the NodeManager no longer tracks but whose
+   * local directories are still on disk.
+   *
+   * The application is not resurrected through INIT_APPLICATION: doing so
+   * would register ACLs and start log aggregation for a dead application, and
+   * would persist the resurrection to the state store. Instead this arc enters
+   * the regular cleanup state directly, so resource destruction, aux-service
+   * notification, token cleanup and removal from the applications map all run
+   * through the same code that executes on every normal application finish.
+   *
+   * There are no containers to wait for by construction: the synthetic
+   * application is created solely for this event, so app-level cleanup is
+   * triggered straight away.
+   */
+  static class OrphanedAppCleanupTransition implements
+      SingleArcTransition<ApplicationImpl, ApplicationEvent> {
+    @Override
+    public void transition(ApplicationImpl app, ApplicationEvent event) {
+      LOG.info("Cleaning up local directories of orphaned application {}"
+          + " for user {}", app.appId, app.user);
+      app.handleAppFinishWithContainersCleanedup();
+    }
   }
 
   @SuppressWarnings("unchecked")
