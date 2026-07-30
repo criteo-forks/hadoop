@@ -833,6 +833,9 @@ Re-owning the local directories of <app> failed: <script> could not use its conf
        script, or a missing YARN_SITE / NM_GROUP_FALLBACK / MIN_UID / BANNED_USERS in it, is
        the likeliest first-deployment cause: there are no built-in defaults. Otherwise fix
        the ownership of that file or of yarn-site.xml (section 8). Do not weaken the check.
+       The same exit code covers a yarn-site.xml that does not parse, which reads as
+       "yarn.nodemanager.local-dirs is not set ... or does not parse" — grep still finds the
+       property in a file xmllint refuses; check with xmllint --noout.
 
 Re-owning the local directories of <app> failed: <script> rejected user '<user>' or the
   application id                                                                 (exit 64)
@@ -860,6 +863,24 @@ Timed out after 60000 ms re-owning the local directories of <app> for user <user
 
 In every case the application is **skipped, not cleaned**, and `orphanedAppDirsReownFailures` is
 incremented.
+
+### If verify-setup says "no local dirs are known"
+
+That FAIL comes from the end-to-end smoke test, which is the last check and depends on every earlier
+one, so it is usually a symptom rather than the fault. It now prints a `cause:` line naming the real
+reason; read that, and the FAILs above it, before looking at `yarn-site.xml`. In order of likelihood:
+
+- **`YARN_SITE is not set`** — the configuration file next to the script is missing, untrusted or
+  incomplete, so there was never a `yarn-site.xml` to read. Fix the configuration failure above.
+- **`<path> does not exist`** — `YARN_SITE` names a file that is not there. Note that on a node with
+  more than one Hadoop install the path is easy to get wrong (`/etc/hadoop/conf` vs
+  `/etc/hadoop3/conf`); the helper reads only what `YARN_SITE` says.
+- **`<path> does not parse as XML`** — `grep` finds the property, `xmllint` refuses the document.
+  The FAIL quotes xmllint's first error; `xmllint --noout <path>` shows the rest.
+- **`yarn.nodemanager.local-dirs is not set`** — the document parses, but the property is not a
+  `<property>` directly under `<configuration>`. A `grep` match can also come from a comment or from
+  a file pulled in by `xi:include`, which neither script expands.
+- **`xmllint is not installed`** — install `libxml2`.
 
 ### Signs you are looking at the old full-wipe path instead
 

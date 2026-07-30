@@ -203,10 +203,20 @@ first_untrusted_ancestor() {
   return 0
 }
 
+# Extracts a property value from yarn-site.xml. Must stay identical to the
+# re-own script's version: reading the property differently than the helper does
+# is the silent failure this script exists to catch.
+#
+# normalize-space() on the name so that a <name> written across several lines -
+# which Hadoop's own parser accepts - still matches, and on the value so that a
+# comparison like reown.command below is not defeated by the surrounding
+# newlines of a pretty-printed file. [1] so a property defined twice resolves to
+# the first definition rather than to the empty string.
 xml_property() {
   local key=$1
   xmllint --xpath \
-    "string(/configuration/property[name='$key']/value)" "$YARN_SITE" 2>/dev/null
+    "normalize-space((/configuration/property[normalize-space(name)='$key']/value)[1])" \
+    "$YARN_SITE" 2>/dev/null
 }
 
 printf '%s: verifying yarn-reown-orphan-app-dir deployment (read-only)\n\n' \
@@ -405,14 +415,27 @@ if [[ -n $YARN_SITE ]]; then
 fi
 
 # --- 6. yarn-site.xml and local dirs ----------------------------------------
+# Why the local dir list ended up empty, when it does. Every failure here leaves
+# it empty, and section 10 can then only report "no local dirs are known" - a
+# message that sends the reader grepping yarn-site.xml even when the actual
+# cause was the configuration file two sections up. Carrying the reason along
+# keeps the last check pointing at the first failure.
+local_dirs_why=""
+# Referenced by section 10 whether or not the loop below runs (set -u).
+present=0
+missing=0
+rejected=0
+
 if [[ -z $YARN_SITE ]]; then
   fail "no yarn-site.xml to verify" \
     "set YARN_SITE in $CONF_FILE, which is where the re-own script reads it" \
     "from, or pass --yarn-site for an ad-hoc check" \
     "every check that depends on it is skipped below"
+  local_dirs_why="YARN_SITE is not set, because $CONF_FILE is missing, untrusted or incomplete"
 elif [[ ! -f $YARN_SITE ]]; then
   fail "$YARN_SITE does not exist (from $YARN_SITE_SOURCE)" \
     "fix YARN_SITE in $CONF_FILE, or pass --yarn-site"
+  local_dirs_why="$YARN_SITE does not exist"
 else
   if offender=$(first_untrusted_ancestor "$YARN_SITE"); then
     pass "$YARN_SITE and its ancestors are root-owned, not group/other-writable"
@@ -441,21 +464,69 @@ else
 fi
 
 local_dirs_raw=""
-if [[ -f $YARN_SITE ]] && command -v xmllint >/dev/null 2>&1; then
+if [[ -n $YARN_SITE && -f $YARN_SITE ]] && command -v xmllint >/dev/null 2>&1; then
   local_dirs_raw=$(xml_property yarn.nodemanager.local-dirs)
   if [[ -z ${local_dirs_raw//[[:space:]]/} ]]; then
-    fail "yarn.nodemanager.local-dirs is not set in $YARN_SITE" \
-      "the re-own script derives every path from it and cannot run without it"
+    # grep finding the property in the file while the XPath finds nothing is the
+    # confusing case these two branches exist to tell apart. Usually the
+    # document does not parse at all, and xmllint's own diagnostic - which
+    # xml_property has to discard, because a property may legitimately be
+    # absent - is the only thing that says where.
+    if ! xml_error=$(xmllint --noout "$YARN_SITE" 2>&1); then
+      fail "$YARN_SITE does not parse as XML, so no property could be read" \
+        "xmllint: ${xml_error%%$'\n'*}" \
+        "the re-own script reads it with the same parser and exits 65, even" \
+        "though grep still finds the property in the file" \
+        "run: xmllint --noout $YARN_SITE"
+      local_dirs_why="$YARN_SITE does not parse as XML"
+    else
+      fail "yarn.nodemanager.local-dirs is not set in $YARN_SITE" \
+        "the re-own script derives every path from it and cannot run without it" \
+        "it has to be a <property> directly under <configuration>; a match that" \
+        "grep finds can also sit in a comment, or in a file pulled in by" \
+        "xi:include, which neither script expands"
+      local_dirs_why="yarn.nodemanager.local-dirs is not set in $YARN_SITE"
+    fi
   else
-    missing=0
-    present=0
     # tr leaves no trailing newline, so without the || [[ -n ... ]] guard the
     # last entry - the only one on a single-local-dir node - is never seen.
     while IFS= read -r d || [[ -n $d ]]; do
-      d=${d//[[:space:]]/}
+      # Trim surrounding whitespace only, exactly as the re-own script does.
+      # Deleting it everywhere would hide an entry that the helper rejects.
+      d=${d#"${d%%[![:space:]]*}"}
+      d=${d%"${d##*[![:space:]]}"}
       [[ -z $d ]] && continue
       d=${d#file://}
-      if [[ -d $d ]]; then
+      # The entries the re-own script refuses outright. They have to be checked
+      # here too: -d alone would report an unexpanded ${...} reference as a
+      # missing directory, and a symlinked local dir as a perfectly good one -
+      # a green run for a list the helper will not process.
+      if [[ $d == *'${'* ]]; then
+        fail "local dir '$d' contains an unexpanded \${...} property reference" \
+          "the re-own script reads yarn-site.xml directly, so Hadoop's property" \
+          "references are never expanded, and it exits 65" \
+          "write the path out in full in $YARN_SITE"
+        rejected=$((rejected + 1))
+      elif [[ $d != /* ]]; then
+        fail "local dir '$d' is not an absolute path" \
+          "the re-own script refuses it and exits 65"
+        rejected=$((rejected + 1))
+      elif [[ $d == *[[:space:]]* ]]; then
+        fail "local dir '$d' contains whitespace" \
+          "the re-own script refuses it and exits 65"
+        rejected=$((rejected + 1))
+      elif [[ $d == */../* || $d == */.. ]]; then
+        fail "local dir '$d' contains a '..' component" \
+          "the re-own script refuses it and exits 65"
+        rejected=$((rejected + 1))
+      elif [[ -L $d ]]; then
+        fail "local dir $d is a symlink" \
+          "the re-own script skips symlinked local dirs, so this one is never" \
+          "processed; with no other usable entry it exits 67 for every" \
+          "application" \
+          "point yarn.nodemanager.local-dirs at the real directory"
+        rejected=$((rejected + 1))
+      elif [[ -d $d ]]; then
         info "local dir $d"
         present=$((present + 1))
       else
@@ -464,14 +535,16 @@ if [[ -f $YARN_SITE ]] && command -v xmllint >/dev/null 2>&1; then
       fi
     done < <(printf '%s' "$local_dirs_raw" | tr ',' '\n')
     if [[ $present -eq 0 ]]; then
-      fail "no yarn.nodemanager.local-dirs entry exists on this node" \
-        "the re-own script has nothing to work on and exits 67" \
-        "check the paths in $YARN_SITE resolve, and that none is written with an" \
-        "unexpanded \${...} property reference, which the script cannot expand"
-    elif [[ $missing -eq 0 ]]; then
-      pass "every yarn.nodemanager.local-dirs entry exists"
+      fail "no usable yarn.nodemanager.local-dirs entry on this node" \
+        "the re-own script has nothing to work on and exits 67"
+    elif [[ $missing -eq 0 && $rejected -eq 0 ]]; then
+      pass "every yarn.nodemanager.local-dirs entry exists and is usable"
     fi
   fi
+elif [[ -z $local_dirs_why ]]; then
+  # yarn-site.xml is fine, so the only way to get here is a missing xmllint,
+  # already reported above.
+  local_dirs_why="xmllint is not installed"
 fi
 
 # --- 7/8. the NodeManager user ----------------------------------------------
@@ -555,11 +628,18 @@ if [[ -x $REOWN_SCRIPT ]]; then
     fi
   elif [[ -z ${local_dirs_raw//[[:space:]]/} ]]; then
     # Same severity as below: without this call nothing has exercised the whole
-    # path, whatever the reason.
+    # path, whatever the reason. The reason itself comes from section 6, because
+    # the cause is usually not the local dirs at all - and a bare "no local dirs
+    # are known" sends the reader grepping yarn-site.xml for a property that is
+    # already there.
     fail "no local dirs are known, so the end-to-end call could not be made" \
-      "fix the configuration file and yarn-site.xml failures above first" \
-      "this is the check that catches a misdeployment; the others test the" \
-      "parts, not the path"
+      "cause: ${local_dirs_why:-unknown}" \
+      "fix that first; nothing below the local dir list can be checked without" \
+      "it, and this is the only check that exercises the whole path"
+  elif [[ $present -eq 0 ]]; then
+    fail "no usable local dir, so the end-to-end call could not be made" \
+      "see the yarn.nodemanager.local-dirs failures above; the re-own script" \
+      "would exit 67 here"
   else
     # Not a warning: this is the only check that exercises the whole path, and
     # a green run without it is exactly how a broken deployment slips through.

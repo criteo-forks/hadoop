@@ -328,10 +328,17 @@ load_conf() {
 # Extracts a property value from yarn-site.xml. xmllint is required rather than
 # regex-parsing XML; absence is a hard failure.
 #
+# normalize-space() on the name so that a <name> written across several lines -
+# which Hadoop's own parser accepts - still matches here, and on the value so
+# that the surrounding newlines of a pretty-printed file do not reach the path
+# checks below. [1] so a property defined twice resolves to the first definition
+# rather than to the empty string. verify-setup carries the same expression.
+#
 xml_property() {
   local key=$1
   xmllint --xpath \
-    "string(/configuration/property[name='$key']/value)" "$YARN_SITE" 2>/dev/null
+    "normalize-space((/configuration/property[normalize-space(name)='$key']/value)[1])" \
+    "$YARN_SITE" 2>/dev/null
 }
 
 #
@@ -511,7 +518,10 @@ main() {
   local local_dirs_raw
   local_dirs_raw=$(xml_property yarn.nodemanager.local-dirs || true)
   if [[ -z ${local_dirs_raw//[[:space:]]/} ]]; then
-    fail "yarn.nodemanager.local-dirs is not set in $YARN_SITE"
+    # Also the message for a yarn-site.xml that does not parse: xml_property
+    # cannot tell the two apart, since a property may legitimately be absent.
+    fail "yarn.nodemanager.local-dirs is not set in $YARN_SITE, or $YARN_SITE" \
+         "does not parse; check with: xmllint --noout $YARN_SITE"
     return $EX_UNTRUSTED_CONFIG
   fi
 
