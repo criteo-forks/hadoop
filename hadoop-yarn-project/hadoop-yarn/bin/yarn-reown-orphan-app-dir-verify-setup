@@ -83,6 +83,12 @@ YARN_SITE=""
 YARN_SITE_SOURCE=""
 NM_USER=""
 DO_SCAN=0
+# Read out of the configuration file in section 5 and used by the smoke test in
+# section 10, which has to filter probe users the way the helper does. Declared
+# here because section 5 may never reach its parse loop (set -u).
+conf_yarn_site=""
+conf_min_uid=""
+conf_banned=""
 
 # Same keys, and same "all of them are required", as the re-own script.
 readonly REQUIRED_KEYS=(YARN_SITE NM_GROUP_FALLBACK MIN_UID BANNED_USERS)
@@ -361,7 +367,6 @@ else
   # Same accepted-key rules as the re-own script's load_conf(). A key it
   # rejects means it exits 65 before it does any work, so an unknown or
   # malformed key is a FAIL here rather than a WARN.
-  conf_yarn_site=""
   conf_seen=""
   conf_ok=1
   while IFS= read -r line || [[ -n $line ]]; do
@@ -396,7 +401,14 @@ else
     case $key in
       YARN_SITE|NM_GROUP_FALLBACK|MIN_UID|BANNED_USERS)
         [[ -n $value ]] && conf_seen="$conf_seen $key"
-        [[ $key == YARN_SITE ]] && conf_yarn_site=$value
+        # Kept, rather than only counted: section 6 needs YARN_SITE, and the
+        # smoke test needs the other two to filter probe users the way the
+        # helper does.
+        case $key in
+          YARN_SITE)     conf_yarn_site=$value ;;
+          MIN_UID)       conf_min_uid=$value ;;
+          BANNED_USERS)  conf_banned=$value ;;
+        esac
         ;;
       *)
         fail "unknown key in $CONF_FILE: $key" \
@@ -609,46 +621,97 @@ fi
 # Non-mutating: the first call passes no arguments, the second an application id
 # that cannot exist. Neither touches a real directory.
 if [[ -x $REOWN_SCRIPT ]]; then
+  # The helper's own stderr is kept rather than discarded: it names the reason
+  # already, so printing it beats telling the reader to re-run the command by
+  # hand. 2>&1 >/dev/null keeps stderr and drops the report on stdout.
   rc=0
-  sudo -u "$NM_USER" sudo -n "$REOWN_SCRIPT" >/dev/null 2>&1 || rc=$?
+  err=$(sudo -u "$NM_USER" sudo -n "$REOWN_SCRIPT" 2>&1 >/dev/null) || rc=$?
+  # One -> line per line of output, so a multi-line reason stays readable under
+  # the failure it belongs to.
+  mapfile -t err_lines <<< "${err:-no output}"
   if [[ $rc -eq 64 ]]; then
     pass "sudo path works: no-argument call was rejected with exit 64"
   elif [[ $rc -eq 1 ]]; then
     fail "sudo refused to run the script as $NM_USER (exit 1)" \
-      "check the sudoers rule and that the NodeManager user is $NM_USER" \
-      "run: sudo -u $NM_USER sudo -n $REOWN_SCRIPT"
+      "${err_lines[@]}" \
+      "check the sudoers rule and that the NodeManager user is $NM_USER"
   else
     fail "unexpected exit $rc from the no-argument smoke test (expected 64)" \
-      "run: sudo -u $NM_USER sudo -n $REOWN_SCRIPT"
+      "${err_lines[@]}"
   fi
 
+  # A probe user the helper would refuse produces a FAIL that says nothing about
+  # the deployment, so candidates are filtered the way the helper filters them -
+  # banned, below MIN_UID, or unresolvable - and the next one is tried instead.
+  # usercache is full of such names: an account that has since been deleted, or
+  # one that is banned on purpose.
   probe_user=""
+  fallback_user=""
+  skipped_users=""
   while IFS= read -r d || [[ -n $d ]]; do
-    d=${d//[[:space:]]/}
+    d=${d#"${d%%[![:space:]]*}"}
+    d=${d%"${d##*[![:space:]]}"}
     [[ -z $d ]] && continue
     d=${d#file://}
     [[ -d $d/usercache ]] || continue
     for candidate in "$d"/usercache/*; do
       [[ -d $candidate ]] || continue
-      probe_user=$(basename "$candidate")
+      candidate_user=$(basename "$candidate")
+      # The NodeManager's own account is in BANNED_USERS by design, yet the
+      # helper accepts it - it is what the reaper passes for an application that
+      # has nothing left but an nmPrivate directory, and only that tree is then
+      # processed. Kept as a last resort rather than skipped, so a node whose
+      # usercache holds nothing else still gets the whole path exercised.
+      if [[ $candidate_user == "$NM_USER" ]]; then
+        fallback_user=$candidate_user
+        continue
+      fi
+      candidate_uid=$(getent passwd "$candidate_user" | cut -d: -f3)
+      if [[ -z ${candidate_uid:-} ]]; then
+        skipped_users="$skipped_users $candidate_user(does not resolve)"
+        continue
+      fi
+      if [[ -n $conf_min_uid && $conf_min_uid =~ ^[0-9]+$ ]] \
+          && (( candidate_uid < conf_min_uid )); then
+        skipped_users="$skipped_users $candidate_user(uid $candidate_uid < MIN_UID)"
+        continue
+      fi
+      if [[ ":$conf_banned:" == *":$candidate_user:"* ]]; then
+        skipped_users="$skipped_users $candidate_user(in BANNED_USERS)"
+        continue
+      fi
+      probe_user=$candidate_user
       break
     done
     [[ -n $probe_user ]] && break
   done < <(printf '%s' "${local_dirs_raw:-}" | tr ',' '\n')
 
+  if [[ -z $probe_user && -n $fallback_user ]]; then
+    probe_user=$fallback_user
+    info "no ordinary user in usercache; probing with the NodeManager's own" \
+         "account $probe_user, which exercises the nmPrivate path only"
+  fi
+
+  if [[ -n $skipped_users ]]; then
+    info "probe candidates the helper would refuse, skipped:$skipped_users"
+  fi
+
   if [[ -n $probe_user ]]; then
     rc=0
-    sudo -u "$NM_USER" sudo -n "$REOWN_SCRIPT" "$probe_user" \
-      application_0_0 >/dev/null 2>&1 || rc=$?
+    err=$(sudo -u "$NM_USER" sudo -n "$REOWN_SCRIPT" "$probe_user" \
+      application_0_0 2>&1 >/dev/null) || rc=$?
+    mapfile -t err_lines <<< "${err:-no output}"
     if [[ $rc -eq 0 ]]; then
       pass "end-to-end call for $probe_user/application_0_0 succeeded" \
            "(nothing to do, no directory touched)"
     else
       fail "end-to-end call exited $rc for $probe_user application_0_0" \
-        "run it by hand to see the reason:" \
-        "sudo -u $NM_USER sudo -n $REOWN_SCRIPT $probe_user application_0_0" \
+        "${err_lines[@]}" \
         "65 = missing, incomplete or untrusted configuration, 67 = no usable" \
-        "local dir, 1 = sudo refused"
+        "local dir, 64 = the user or application id was rejected, 1 = sudo" \
+        "refused" \
+        "to reproduce: sudo -u $NM_USER sudo -n $REOWN_SCRIPT $probe_user" \
+        "application_0_0"
     fi
   elif [[ -z ${local_dirs_raw//[[:space:]]/} ]]; then
     # Same severity as below: without this call nothing has exercised the whole

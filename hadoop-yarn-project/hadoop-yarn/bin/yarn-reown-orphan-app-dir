@@ -452,7 +452,20 @@ main() {
     fail "not a valid application id: '$app_id'"
     return $EX_USAGE
   fi
-  if [[ ! $user =~ ^[a-z_][a-z0-9_-]*$ ]]; then
+  # Deliberately permissive about the shape of the name, and strict about the
+  # characters that matter: <user> is only ever used as one path component, so
+  # what has to be excluded is '/', whitespace and control characters, a leading
+  # '-' that a command could read as an option, and '.' / '..' as a whole name.
+  # Everything else is left to getent below, which is the authority on whether
+  # the account exists - container-executor takes the same position and calls
+  # getpwnam without pattern-matching the name at all. A tighter regex only
+  # breaks real accounts: firstname.lastname is the common LDAP shape, machine
+  # accounts end in '$', and an AD-derived name can carry '@'.
+  # Single-quoted, and matched through the variable: bash expands the right-hand
+  # side of =~ before matching, so a literal '$-' in the pattern would expand to
+  # the shell's option flags and quietly change the character class.
+  local user_re='^[A-Za-z0-9_][A-Za-z0-9._@$-]*$'
+  if [[ ! $user =~ $user_re ]]; then
     fail "not a valid user name: '$user'"
     return $EX_USAGE
   fi
