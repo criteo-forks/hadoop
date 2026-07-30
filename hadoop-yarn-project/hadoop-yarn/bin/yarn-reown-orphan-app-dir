@@ -294,12 +294,28 @@ load_conf() {
   local line key value
   while IFS= read -r line || [[ -n $line ]]; do
     [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
-    if [[ ! $line =~ ^([A-Z_]+)=(.*)$ ]]; then
-      fail "malformed line in $CONF_FILE: $line"
+    # Whitespace around the key and the = is accepted and dropped, as it is in
+    # container-executor.cfg. Only the value is taken literally.
+    if [[ ! $line =~ ^[[:space:]]*([A-Z_]+)[[:space:]]*=(.*)$ ]]; then
+      fail "malformed line in $CONF_FILE: '$line'"
       return 1
     fi
     key=${BASH_REMATCH[1]}
     value=${BASH_REMATCH[2]}
+    # Trim surrounding whitespace, which includes the CR of a file saved with
+    # CRLF endings. A trailing space is invisible in an editor and in every
+    # message printed below, so leaving it in turns a correct path into an
+    # inexplicable "does not exist" - and a templating tool emits one easily.
+    value=${value#"${value%%[![:space:]]*}"}
+    value=${value%"${value##*[![:space:]]}"}
+    # Nothing is unquoted here: the file is parsed rather than sourced, so
+    # quotes would become part of the value. Say that, rather than failing later
+    # on a path that reads correctly in the message.
+    if [[ ( $value == \"*\" || $value == \'*\' ) && ${#value} -ge 2 ]]; then
+      fail "value of $key in $CONF_FILE is wrapped in quotes: $value." \
+           "This file is parsed, not sourced; write the value unquoted"
+      return 1
+    fi
     case $key in
       YARN_SITE|NM_GROUP_FALLBACK|MIN_UID|BANNED_USERS)
         # printf -v assigns without eval, so the file cannot execute code.
@@ -500,7 +516,9 @@ main() {
   # E5: the configuration decides which trees get chowned, so it must not be
   # writable by the account that invokes this script.
   if [[ ! -f $YARN_SITE ]]; then
-    fail "$YARN_SITE does not exist"
+    # Quoted: the value comes from a file an operator edited, and an unquoted
+    # message hides a stray character in it.
+    fail "YARN_SITE '$YARN_SITE' from $CONF_FILE does not exist"
     return $EX_UNTRUSTED_CONFIG
   fi
   if ! require_root_owned "$YARN_SITE"; then

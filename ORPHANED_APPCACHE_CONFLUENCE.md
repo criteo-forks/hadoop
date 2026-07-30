@@ -597,6 +597,14 @@ relaxed, unknown keys are rejected rather than ignored, and it is subject to the
 as `yarn-site.xml`. Its location is never taken from the environment: it is derived from the path
 `sudo` actually executed, which the `sudoers` command spec pins.
 
+Syntax, as both scripts parse it: one `KEY=value` per line, `#` comments and blank lines ignored.
+Whitespace around the key and around the `=` is dropped, and so is whitespace surrounding the value —
+including the `CR` of a file saved with CRLF endings — because a trailing space is invisible in an
+editor and in every error message, and turns a correct path into an inexplicable
+`does not exist`. Values are **not** unquoted: `YARN_SITE="/etc/…"` would keep its quotes, so both
+scripts reject a quote-wrapped value with a message that says so rather than failing later on a path
+that reads correctly.
+
 ### Pre-flight
 
 * **The `yarn-site.xml` named by `YARN_SITE`, and every one of its ancestors, must be root-owned with
@@ -872,9 +880,11 @@ reason; read that, and the FAILs above it, before looking at `yarn-site.xml`. In
 
 - **`YARN_SITE is not set`** — the configuration file next to the script is missing, untrusted or
   incomplete, so there was never a `yarn-site.xml` to read. Fix the configuration failure above.
-- **`<path> does not exist`** — `YARN_SITE` names a file that is not there. Note that on a node with
-  more than one Hadoop install the path is easy to get wrong (`/etc/hadoop/conf` vs
-  `/etc/hadoop3/conf`); the helper reads only what `YARN_SITE` says.
+- **`<path> does not exist`** — `YARN_SITE` names a file that is not there. On a node with more than
+  one Hadoop install the path is easy to get wrong (`/etc/hadoop/conf` vs `/etc/hadoop3/conf`); the
+  helper reads only what `YARN_SITE` says. If the path in the message looks identical to the one
+  `ls` finds, compare the character count the FAIL prints with the real length — the value is quoted
+  in the message precisely so a stray character shows up.
 - **`<path> does not parse as XML`** — `grep` finds the property, `xmllint` refuses the document.
   The FAIL quotes xmllint's first error; `xmllint --noout <path>` shows the rest.
 - **`yarn.nodemanager.local-dirs is not set`** — the document parses, but the property is not a

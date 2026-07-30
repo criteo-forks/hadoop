@@ -366,8 +366,8 @@ else
   conf_ok=1
   while IFS= read -r line || [[ -n $line ]]; do
     [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
-    if [[ ! $line =~ ^([A-Z_]+)=(.*)$ ]]; then
-      fail "malformed line in $CONF_FILE: $line" \
+    if [[ ! $line =~ ^[[:space:]]*([A-Z_]+)[[:space:]]*=(.*)$ ]]; then
+      fail "malformed line in $CONF_FILE: '$line'" \
         "the re-own script rejects it and exits 65; only KEY=value, blank and" \
         "# comment lines are accepted"
       conf_ok=0
@@ -375,6 +375,24 @@ else
     fi
     key=${BASH_REMATCH[1]}
     value=${BASH_REMATCH[2]}
+    # Same trim as the re-own script's load_conf(), and reported: a trailing
+    # space is invisible everywhere else, so an operator who left one deserves
+    # to hear about it from the script whose job is to find that kind of thing.
+    raw_value=$value
+    value=${value#"${value%%[![:space:]]*}"}
+    value=${value%"${value##*[![:space:]]}"}
+    if [[ $value != "$raw_value" ]]; then
+      warn "$key in $CONF_FILE has surrounding whitespace: '$raw_value'" \
+           "both scripts trim it, so this is not a fault; a value saved with" \
+           "CRLF endings or a trailing space is worth cleaning up anyway"
+    fi
+    if [[ ( $value == \"*\" || $value == \'*\' ) && ${#value} -ge 2 ]]; then
+      fail "$key in $CONF_FILE is wrapped in quotes: $value" \
+        "the re-own script parses this file rather than sourcing it, so the" \
+        "quotes become part of the value and it exits 65; write it unquoted"
+      conf_ok=0
+      continue
+    fi
     case $key in
       YARN_SITE|NM_GROUP_FALLBACK|MIN_UID|BANNED_USERS)
         [[ -n $value ]] && conf_seen="$conf_seen $key"
@@ -433,9 +451,15 @@ if [[ -z $YARN_SITE ]]; then
     "every check that depends on it is skipped below"
   local_dirs_why="YARN_SITE is not set, because $CONF_FILE is missing, untrusted or incomplete"
 elif [[ ! -f $YARN_SITE ]]; then
-  fail "$YARN_SITE does not exist (from $YARN_SITE_SOURCE)" \
-    "fix YARN_SITE in $CONF_FILE, or pass --yarn-site"
-  local_dirs_why="$YARN_SITE does not exist"
+  # Quoted, and the length given: the value was typed into a file by hand, and
+  # an unquoted message renders a stray character in it invisible - which is
+  # exactly the case where the operator goes and checks that the file is there.
+  fail "yarn-site.xml '$YARN_SITE' does not exist (from $YARN_SITE_SOURCE," \
+    "${#YARN_SITE} characters)" \
+    "fix YARN_SITE in $CONF_FILE, or pass --yarn-site" \
+    "if the path looks right, compare that length with the real one:" \
+    "ls -l '$YARN_SITE'"
+  local_dirs_why="yarn-site.xml '$YARN_SITE' does not exist"
 else
   if offender=$(first_untrusted_ancestor "$YARN_SITE"); then
     pass "$YARN_SITE and its ancestors are root-owned, not group/other-writable"
