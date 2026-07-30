@@ -513,8 +513,17 @@ identity that opens the file and runs the interpreter. Do not "fix" this to `075
 | What | Where | Owner | Mode |
 |---|---|---|---|
 | re-own script | `/usr/libexec/hadoop-yarn/yarn-reown-orphan-app-dir` | `root:root` | `0700` |
+| configuration file | `/usr/libexec/hadoop-yarn/yarn-reown-orphan-app-dir.conf` | `root:root` | `0600` |
 | verification script | `/usr/libexec/hadoop-yarn/yarn-reown-orphan-app-dir-verify-setup` | `root:root` | `0700` |
 | sudoers drop-in | `/etc/sudoers.d/yarn-reown-orphan-app-dir` | `root:root` | `0440` |
+
+**All three files go in the same directory, and that is load-bearing.** The re-own script resolves its
+own path and reads `yarn-reown-orphan-app-dir.conf` from beside it; the verification script does the
+same to find both. Nothing has a compiled-in `/etc` path and nothing has a built-in default, so a site
+that deploys somewhere other than `/usr/libexec/hadoop-yarn` changes the `sudoers` command spec and
+`reown.command` only — **the scripts themselves are never edited or templated.** That matters most for
+the verification script: it is what gates the rollout, so it should stay byte-identical to what was
+reviewed.
 
 Every owner and mode above is a security requirement, each mapping to a row in the threat model
 below. Enforce them from packaging (`%attr(0700,root,root)` in the rpm spec, or the puppet `file`
@@ -524,7 +533,8 @@ Both scripts live in `hadoop-yarn-project/hadoop-yarn/bin/` in the source tree a
 of any assembly, so they are absent from the distribution tarball. That is deliberate — a 0700
 root-owned file has no business being unpacked from a `yarn`-owned tarball — but it means the
 packaging step has to take them from a source checkout, and that a Hadoop upgrade does not update
-them on its own.
+them on its own. The configuration file has no source-tree counterpart at all: it is per-cluster, so
+packaging or puppet generates it.
 
 * **Do not install under `$HADOOP_HOME/bin`.** That tree is `yarn`-owned in the common layout, and
   `sudo` running a `yarn`-writable script as root hands `yarn` a root shell.
@@ -548,18 +558,58 @@ reasonable defence in depth, but it is **not** a substitute for the script's own
 command spec without arguments permits any arguments, and `sudo` passes argv rather than a shell
 string.
 
+### Configuration
+
+`/usr/libexec/hadoop-yarn/yarn-reown-orphan-app-dir.conf` is **mandatory**, and every setting the
+re-own script has lives in it as `KEY=value` lines. All four keys are required; there are no built-in
+defaults, so a missing file, a missing key or an empty value exits `65` and re-owns nothing:
+
+```
+# yarn-reown-orphan-app-dir.conf — root:root 0600, beside the script
+YARN_SITE=/etc/hadoop/conf/yarn-site.xml
+NM_GROUP_FALLBACK=yarn
+MIN_UID=1000
+BANNED_USERS=root:yarn:mapred:hdfs:bin:daemon
+```
+
+| Key | What it decides |
+|---|---|
+| `YARN_SITE` | Absolute path of the `yarn-site.xml` the script reads `yarn.nodemanager.local-dirs` from — i.e. **which trees it will `chown`** |
+| `NM_GROUP_FALLBACK` | Group to `chown` to when `usercache/<user>` is already gone and its group can no longer be read |
+| `MIN_UID` | Lowest uid accepted as `<user>`, mirroring `min.user.id` in `container-executor.cfg` |
+| `BANNED_USERS` | Colon-separated users refused as `<user>`, mirroring `banned.users` |
+
+Why nothing is defaulted:
+
+* A default `YARN_SITE` means the script reads a `yarn-site.xml` **nobody pointed it at** — and that
+  file decides which trees get `chown`ed as root. Requiring it stated makes the blast radius an
+  explicit, reviewable line in a root-owned file.
+* A default `MIN_UID` or `BANNED_USERS` silently applies a policy that can **disagree with
+  `container-executor.cfg`**. The script does not read that file (it has no
+  `allowed.system.users` equivalent either), so a cluster that tunes `min.user.id` or `banned.users`
+  must mirror the change here — which it cannot notice it is failing to do if a built-in default
+  quietly stands in.
+* Failing closed is cheap: the reaper still runs, `orphanedAppDirsReownFailures` climbs, and
+  `yarn-reown-orphan-app-dir-verify-setup` names the missing key.
+
+The file is **parsed, not sourced**, so it cannot execute code even if its permissions are later
+relaxed, unknown keys are rejected rather than ignored, and it is subject to the same ownership check
+as `yarn-site.xml`. Its location is never taken from the environment: it is derived from the path
+`sudo` actually executed, which the `sudoers` command spec pins.
+
 ### Pre-flight
 
-* **`/etc/hadoop/conf/yarn-site.xml` and every ancestor must be root-owned with no group or other
-  write bit.** The script refuses to read a configuration it does not trust, because
-  `local-dirs` decides which trees get chowned. This is the check most likely to fail on a first
-  deployment — some layouts ship Hadoop configuration as `yarn`-owned. **Fix the ownership; do not
-  weaken the check.**
+* **The `yarn-site.xml` named by `YARN_SITE`, and every one of its ancestors, must be root-owned with
+  no group or other write bit** — as must the configuration file naming it. The script refuses to read
+  a configuration it does not trust, because `local-dirs` decides which trees get chowned. This is the
+  check most likely to fail on a first deployment — some layouts ship Hadoop configuration as
+  `yarn`-owned. **Fix the ownership; do not weaken the check.**
 * `xmllint` must be present (package `libxml2`). The script aborts rather than regex-parsing XML.
-* `realpath` must be present (package `coreutils`). The configuration path is resolved before its
-  ancestors are checked, so that a symlinked component — `/etc/hadoop/conf` pointing at a versioned
-  or alternatives-managed directory — is checked as the directory it really is, rather than as a
-  link whose own `0777` mode would fail the check.
+* `realpath` must be present (package `coreutils`). Both scripts resolve their own path with it to
+  find the configuration file, and every configuration path is resolved before its ancestors are
+  checked, so that a symlinked component — `/etc/hadoop/conf` pointing at a versioned or
+  alternatives-managed directory — is checked as the directory it really is, rather than as a link
+  whose own `0777` mode would fail the check.
 * `yarn.nodemanager.local-dirs` must be written as plain absolute paths. The script reads
   `yarn-site.xml` directly and does not expand Hadoop's `${...}` property references; a value
   containing one is refused rather than skipped, because "skipped" and "nothing to do" must not
@@ -567,29 +617,33 @@ string.
 * The NodeManager must not run as root; the script derives the `nmPrivate` owner from `SUDO_UID` and
   rejects `0`.
 
-An optional root-owned `/etc/yarn-reown-orphan-app-dir.conf` may override `YARN_SITE`,
-`NM_GROUP_FALLBACK`, `MIN_UID` and `BANNED_USERS` as `KEY=value` lines. It is parsed, not sourced, so
-it cannot execute code, and it is subject to the same ownership check. The configuration location is
-never taken from the environment: anything `sudo` lets through is caller-controlled.
-
 ### Verification
 
-One command, as root:
+One command, as root. `--nm-user` is required — there is no default, because guessing `yarn` would
+turn every `sudo` check below into a vacuous pass on a cluster that runs the NodeManager as something
+else:
 
 ```
-/usr/libexec/hadoop-yarn/yarn-reown-orphan-app-dir-verify-setup
+/usr/libexec/hadoop-yarn/yarn-reown-orphan-app-dir-verify-setup --nm-user yarn
 ```
+
+No other flag is needed when the three files are co-located: the verification script finds the re-own
+script and the configuration file next to itself, and takes the `yarn-site.xml` to check from
+`YARN_SITE` in that configuration file — the same file the helper itself will read. It prints which
+`yarn-site.xml` it used and where that came from, because checking a *different* `yarn-site.xml` than
+the helper reads is exactly the silent failure this script exists to catch. `--script`, `--conf` and
+`--yarn-site` exist for ad-hoc checks and for a non-standard deployment directory.
 
 It is **read-only** — it checks and reports, never fixes — so it is safe to run on a production node
 and safe to re-run. It exits `0` only when every check passed, so it can gate a puppet run or a
 canary rollout, and prints remediation under each failure. It verifies: the script's ownership, mode
 and ancestors; the sudoers file's ownership, mode and `visudo` validity; that `#includedir` is
-active and that `sudo -l -U yarn` actually resolves the rule with `NOPASSWD`; `yarn-site.xml`
-trust and that at least one `local-dirs` entry exists; the override file's trust, if it is present;
-`xmllint` and `realpath`; that the NodeManager user resolves and is
-not uid 0; that `reown.command` matches the installed path (a mismatch here is the likeliest silent
-failure); and a **non-mutating end-to-end call** through the real `sudo` path against
-`application_0_0`, which cannot exist. `--scan` additionally counts `root`-owned entries under
+active and that `sudo -l -U yarn` actually resolves the rule with `NOPASSWD`; that the configuration
+file exists, is trusted, is mode `0600`, parses, and sets all four required keys; `yarn-site.xml`
+trust and that at least one `local-dirs` entry exists; `xmllint` and `realpath`; that the NodeManager
+user resolves and is not uid 0; that `reown.command` matches the installed path (a mismatch here is
+the likeliest silent failure); and a **non-mutating end-to-end call** through the real `sudo` path
+against `application_0_0`, which cannot exist. `--scan` additionally counts `root`-owned entries under
 `usercache` and `nmPrivate` in each local dir, as a baseline of the backlog.
 
 That end-to-end call is the check that matters: it is the only one that exercises the whole path
@@ -613,12 +667,12 @@ created or removed in the tree for `min-age-ms` (default 6 h).
 | E2 | A root process inside the container plants symlinks deep in the tree (it controls `private_slash_tmp`) | `fts` `FTS_PHYSICAL` never dereferences; only the link inode is chowned, which is inert — symlink ownership only matters for sticky-directory unlink rules |
 | E3 | A root process inside the container hardlinks a `root`-owned file from elsewhere on the same device into the tree | **Residual, accepted.** Bounded to `root`-owned files on the same filesystem reachable through that container's own bind mounts, and `--from=0` limits the effect to files that are already `root`-owned. `fs.protected_hardlinks=1` does not help against real root, but the application is dead and idle for `min-age-ms` before we act |
 | E4 | A leftover bind mount or tmpfs under the tree, so `chown -R` crosses into a live filesystem | `chown` has no `--one-file-system`, so any tree containing a mount point per `/proc/self/mountinfo` is refused outright. This is treated as a failure, not a skip, so the metric surfaces it |
-| E5 | `yarn` rewrites `yarn.nodemanager.local-dirs` in `yarn-site.xml` to redirect the chown at an arbitrary tree | `yarn-site.xml` and every ancestor must be root-owned and not group/other-writable before it is read. Abort otherwise |
-| E6 | `yarn` replaces the script that `sudo` runs as root | `sudoers` names an absolute path that must live outside any `yarn`-writable tree; `0700 root:root` additionally denies `yarn` read and execute, making `sudo` the only route in. Both scripts use an absolute `#!/bin/bash` rather than `/usr/bin/env bash`, so the interpreter is not resolved through `PATH` |
-| E7 | Path traversal or injection through `<user>` / `<app_id>` | Both are regex-validated before use (`^application_[0-9]+_[0-9]+$`; a user name that resolves, has uid ≥ `MIN_UID` and is not in `BANNED_USERS` — the same shape as `check_user` in `container-executor`, but **not** the same source: the script carries its own `MIN_UID` and `BANNED_USERS` rather than reading `min.user.id`, `banned.users` and `allowed.system.users` from `container-executor.cfg`, so a cluster that tunes any of those must mirror the change in the override file). No path comes from argv, and `sudo` passes argv rather than a shell string |
+| E5 | `yarn` rewrites `yarn.nodemanager.local-dirs` in `yarn-site.xml` to redirect the chown at an arbitrary tree, or edits `yarn-reown-orphan-app-dir.conf` to point `YARN_SITE` at a `yarn-site.xml` it controls | Both files, and every one of their ancestors, must be root-owned and not group/other-writable before they are read. Abort otherwise |
+| E6 | `yarn` replaces the script that `sudo` runs as root, or the configuration file it reads as root | `sudoers` names an absolute path that must live outside any `yarn`-writable tree; `0700 root:root` on the script additionally denies `yarn` read and execute, making `sudo` the only route in, and `0600 root:root` on the co-located configuration file denies it the same. Both scripts use an absolute `#!/bin/bash` rather than `/usr/bin/env bash`, so the interpreter is not resolved through `PATH` |
+| E7 | Path traversal or injection through `<user>` / `<app_id>` | Both are regex-validated before use (`^application_[0-9]+_[0-9]+$`; a user name that resolves, has uid ≥ `MIN_UID` and is not in `BANNED_USERS` — the same shape as `check_user` in `container-executor`, but **not** the same source: the script carries its own `MIN_UID` and `BANNED_USERS` rather than reading `min.user.id`, `banned.users` and `allowed.system.users` from `container-executor.cfg`, so a cluster that tunes any of those must mirror the change in `yarn-reown-orphan-app-dir.conf`, where both are required rather than defaulted). No path comes from argv, and `sudo` passes argv rather than a shell string |
 | E8 | Chowning a live application's directories | The reaper only selects applications absent from `getApplications()`, which still holds an application that has released every container on the node but is serving shuffle data. On top of that, no container work directory may have been created or removed in the tree for `min-age-ms`. The chown happens before the synthetic application is registered, and `putIfAbsent` still guards the race |
 | E9 | A `root`-owned setuid binary in the tree becomes setuid-application-user | Linux clears `S_ISUID`/`S_ISGID` on `chown` of a non-directory |
-| E10 | Environment manipulation through `sudo` | `env_reset` is `sudo`'s default, both scripts pin `PATH` themselves, `sudo -n` never prompts or reads a tty, and the configuration location is never read from the environment |
+| E10 | Environment manipulation through `sudo` | `env_reset` is `sudo`'s default, both scripts pin `PATH` themselves, `sudo -n` never prompts or reads a tty, and the configuration location is never read from the environment — it is derived from the path `sudo` actually executed, which the `sudoers` command spec pins, and the file is then subject to E5 |
 
 ### Rollback
 
@@ -631,7 +685,8 @@ is the intended alert.
 
 ## 9. Rollout and rollback
 
-1. **Deploy the helper** (section 8) and confirm `yarn-reown-orphan-app-dir-verify-setup` exits `0`
+1. **Deploy the helper** (section 8) — all three files in one directory, including the mandatory
+   configuration file — and confirm `yarn-reown-orphan-app-dir-verify-setup --nm-user yarn` exits `0`
    on the canary nodes. Do this first: without it the canary will select very little and you will
    draw the wrong conclusion about the scan.
 2. **Canary.** Enable on a handful of NodeManagers known to be leaking. Confirm from the logs
@@ -695,7 +750,7 @@ The second-to-last count is the one to watch. It is mirrored by the
 the helper is misdeployed — most often a missing `sudo` rule, or a `yarn-site.xml` the helper does
 not trust. Those applications are **not** pushed through the cleanup chain, so nothing is silently
 marked as cleaned; they simply stay on disk until the deployment is fixed. Re-run
-`yarn-reown-orphan-app-dir-verify-setup` on the node, which will name the problem.
+`yarn-reown-orphan-app-dir-verify-setup --nm-user yarn` on the node, which will name the problem.
 
 The last count is the other one to watch, and for the opposite reason: **it should fall.** A
 `cleanup dispatched for N` that stays at the same non-zero N scan after scan, with `usercache` not
@@ -771,9 +826,13 @@ Helper failures are logged with the reason spelled out, because each one has a d
 surfaces for a failing command:
 
 ```
-Re-owning the local directories of <app> failed: <script> refused to read its configuration
-  because it is not root-owned or is group/other-writable                        (exit 65)
-    -> fix the ownership of yarn-site.xml (section 8, pre-flight). Do not weaken the check.
+Re-owning the local directories of <app> failed: <script> could not use its configuration
+  - the file is missing, a required key is unset, or it is not root-owned /
+  is group/other-writable                                                        (exit 65)
+    -> the stderr line names which. A missing yarn-reown-orphan-app-dir.conf beside the
+       script, or a missing YARN_SITE / NM_GROUP_FALLBACK / MIN_UID / BANNED_USERS in it, is
+       the likeliest first-deployment cause: there are no built-in defaults. Otherwise fix
+       the ownership of that file or of yarn-site.xml (section 8). Do not weaken the check.
 
 Re-owning the local directories of <app> failed: <script> rejected user '<user>' or the
   application id                                                                 (exit 64)
@@ -788,7 +847,7 @@ Re-owning the local directories of <app> failed: <script> found no usable direct
 
 Re-owning the local directories of <app> for user <user> failed with exit code 1
     -> almost always the missing sudoers rule; sudo itself exits 1 when it refuses.
-       Run yarn-reown-orphan-app-dir-verify-setup.
+       Run yarn-reown-orphan-app-dir-verify-setup --nm-user yarn.
 
 Re-owning the local directories of <app> for user <user> failed with exit code 66
     -> a chown failed, or a mount point exists at or below the tree and it was refused
