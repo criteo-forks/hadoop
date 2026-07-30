@@ -51,13 +51,35 @@
 # WHAT THIS SCRIPT CAN DO, AT MOST
 #
 # chown entries *currently owned by root* to <validated-user>:<nm-group>, under
-# two derived paths per configured local dir. It never deletes, never creates,
-# never writes file content, and never changes modes. No filesystem path is
-# accepted from argv.
+# two derived paths per local dir. It never deletes, never creates, never writes
+# file content, and never changes modes. No filesystem path is accepted from
+# argv.
 #
 # It only ever runs against an application the NodeManager no longer tracks
 # whose directories have been idle for yarn.nodemanager.orphaned-app-dirs.
 # min-age-ms (default 6h), so no live container process is racing it.
+#
+# CONFIGURATION
+#
+# Every setting is read from
+#
+#     <directory holding this script>/yarn-reown-orphan-app-dir.conf
+#
+# as KEY=value lines. All four keys are mandatory:
+#
+#     YARN_SITE          absolute path of the yarn-site.xml to read
+#                        yarn.nodemanager.local-dirs from
+#     NM_GROUP_FALLBACK  group to chown to when the per-user cache directory is
+#                        gone and its group can no longer be read
+#     MIN_UID            lowest uid this script accepts as <user>
+#     BANNED_USERS       colon-separated users it refuses as <user>
+#
+# There is deliberately no built-in default, and no fixed /etc location. A
+# default yarn-site.xml path makes the script read a file nobody pointed it at,
+# and a default MIN_UID or BANNED_USERS silently applies a policy that can
+# disagree with container-executor.cfg. A missing file, a missing key or an
+# empty value is a hard error (65), never a fallback. Keeping the file next to
+# the script also means a deployment copies one directory and templates nothing.
 #
 # THREAT MODEL
 #
@@ -83,13 +105,16 @@
 #     live filesystem (chown has no --one-file-system).
 #     -> any tree containing a mount point per /proc/self/mountinfo is refused.
 # E5  yarn rewrites yarn.nodemanager.local-dirs in yarn-site.xml to redirect
-#     the chown at an arbitrary tree.
-#     -> yarn-site.xml and every ancestor must be root-owned and not
-#        group/other-writable before it is read. Abort otherwise.
-# E6  yarn replaces this script, which sudo runs as root.
-#     -> deploy to a root-owned, non-yarn-writable directory
-#        (/usr/libexec/hadoop-yarn), root:root mode 0700, enforced by
-#        packaging. See ORPHANED_APPCACHE_CONFLUENCE.md.
+#     the chown at an arbitrary tree, or edits the configuration file that says
+#     which yarn-site.xml to read.
+#     -> both files, and every one of their ancestors, must be root-owned and
+#        not group/other-writable before they are read. Abort otherwise.
+# E6  yarn replaces this script, or the configuration file beside it, which sudo
+#     reads and executes as root.
+#     -> deploy both to a root-owned, non-yarn-writable directory
+#        (/usr/libexec/hadoop-yarn), root:root, mode 0700 for the script and
+#        0600 for the configuration file, enforced by packaging. See
+#        ORPHANED_APPCACHE_CONFLUENCE.md.
 # E7  Path traversal or injection through <user> / <app_id>.
 #     -> both regex-validated before use; no path comes from argv, and sudo
 #        passes argv rather than a shell string.
@@ -100,14 +125,16 @@
 # E9  A root-owned setuid binary in the tree becomes setuid-app-user.
 #     -> Linux clears S_ISUID/S_ISGID on chown of a non-directory.
 # E10 Environment manipulation through sudo.
-#     -> env_reset is sudo's default; PATH is pinned below; the conf location
-#        is never taken from the environment.
+#     -> env_reset is sudo's default; PATH is pinned below; the configuration
+#        location is never taken from the environment. It is derived from the
+#        path sudo actually executed, which the sudoers command spec pins, and
+#        the file itself is then subject to the E5 ownership check.
 #
 # Exit codes: 0 success (including "nothing to do"), 64 argument validation,
-# 65 untrusted configuration, 66 chown failure, 67 no local directory could be
-# processed at all - which must never be reported as success, because the
-# caller would then push the application through a cleanup chain that reports
-# success without checking that anything was deleted.
+# 65 missing, incomplete or untrusted configuration, 66 chown failure, 67 no
+# local directory could be processed at all - which must never be reported as
+# success, because the caller would then push the application through a cleanup
+# chain that reports success without checking that anything was deleted.
 #
 ###############################################################################
 
@@ -130,17 +157,25 @@ readonly EX_NOTHING_PROCESSED=67
 
 readonly PROG=yarn-reown-orphan-app-dir
 
-# Fixed location, deliberately NOT taken from the environment: anything sudo
-# lets through is caller-controlled. Override only via the root-owned file
-# below, which lives outside the Hadoop configuration directory.
-readonly DEFAULT_YARN_SITE=/etc/hadoop/conf/yarn-site.xml
-readonly OVERRIDE_FILE=/etc/yarn-reown-orphan-app-dir.conf
+# Resolved from this script's own location by resolve_conf_file(), rather than
+# hard-coded under /etc: the deployment directory is already root-owned and
+# non-yarn-writable (E6), so the file needs no second location with its own
+# ownership requirements, and a deployment templates nothing. Deliberately NOT
+# taken from the environment - anything sudo lets through is caller-controlled
+# (E10).
+CONF_FILE=""
 
-# Overridable through OVERRIDE_FILE.
-YARN_SITE="$DEFAULT_YARN_SITE"
-NM_GROUP_FALLBACK=yarn
-MIN_UID=1000
-BANNED_USERS=root:yarn:mapred:hdfs:bin:daemon
+# Every setting comes from CONF_FILE; see CONFIGURATION above for why none of
+# these has a built-in default. Empty here means "not configured yet", and
+# load_conf() refuses to return without all four set.
+YARN_SITE=""
+NM_GROUP_FALLBACK=""
+MIN_UID=""
+BANNED_USERS=""
+
+# An array rather than a space-separated string: IFS is newline+tab globally, so
+# a string would not word-split here.
+readonly REQUIRED_KEYS=(YARN_SITE NM_GROUP_FALLBACK MIN_UID BANNED_USERS)
 
 log()  { printf '%s: %s\n' "$PROG" "$*" >&2; }
 fail() { log "ERROR: $*"; }
@@ -162,6 +197,10 @@ $PROG <user> <app_id>
 Re-owns root-owned content under an orphaned YARN application directory to
 <user>, so the NodeManager can delete it as that user. Run through sudo by
 the NodeManager; see ORPHANED_APPCACHE_CONFLUENCE.md before deploying.
+
+Every setting is read from $PROG.conf in this script's own
+directory, which is required: YARN_SITE, NM_GROUP_FALLBACK, MIN_UID and
+BANNED_USERS must all be set there. There are no built-in defaults.
 EOF
 }
 
@@ -213,15 +252,42 @@ require_root_owned() {
 }
 
 #
-# Reads KEY=value lines from the root-owned override file, accepting only a
-# fixed set of keys. Parsed rather than sourced, so the file cannot execute
-# code even if its permissions are later relaxed.
+# Derives the configuration file location from this script's own path. sudo
+# execve()s the absolute path named by the sudoers command spec, so $0 - and
+# therefore BASH_SOURCE[0] - is that pinned path, not something the caller
+# chose. Even if it were, load_conf() puts the result through
+# require_root_owned() before reading a byte of it.
 #
-load_overrides() {
-  [[ -e $OVERRIDE_FILE ]] || return 0
+# The basename is fixed: renaming or symlinking the script does not rename its
+# configuration, so the two cannot silently drift apart.
+#
+resolve_conf_file() {
+  local self dir
+  if ! self=$(realpath -e -- "${BASH_SOURCE[0]}" 2>/dev/null); then
+    fail "cannot resolve the path of this script (${BASH_SOURCE[0]});" \
+         "is realpath installed?"
+    return 1
+  fi
+  dir=$(dirname -- "$self")
+  CONF_FILE=$dir/$PROG.conf
+  return 0
+}
 
-  if ! require_root_owned "$OVERRIDE_FILE"; then
-    fail "refusing to read untrusted override file $OVERRIDE_FILE"
+#
+# Reads KEY=value lines from the root-owned configuration file, accepting only a
+# fixed set of keys, all of which are required. Parsed rather than sourced, so
+# the file cannot execute code even if its permissions are later relaxed.
+#
+load_conf() {
+  if [[ ! -e $CONF_FILE ]]; then
+    fail "$CONF_FILE does not exist. Every setting comes from it and there are" \
+         "no built-in defaults; deploy it next to this script with YARN_SITE," \
+         "NM_GROUP_FALLBACK, MIN_UID and BANNED_USERS set"
+    return 1
+  fi
+
+  if ! require_root_owned "$CONF_FILE"; then
+    fail "refusing to read untrusted configuration file $CONF_FILE"
     return 1
   fi
 
@@ -229,7 +295,7 @@ load_overrides() {
   while IFS= read -r line || [[ -n $line ]]; do
     [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
     if [[ ! $line =~ ^([A-Z_]+)=(.*)$ ]]; then
-      fail "malformed line in $OVERRIDE_FILE: $line"
+      fail "malformed line in $CONF_FILE: $line"
       return 1
     fi
     key=${BASH_REMATCH[1]}
@@ -240,11 +306,21 @@ load_overrides() {
         printf -v "$key" '%s' "$value"
         ;;
       *)
-        fail "unknown key in $OVERRIDE_FILE: $key"
+        fail "unknown key in $CONF_FILE: $key"
         return 1
         ;;
     esac
-  done < "$OVERRIDE_FILE"
+  done < "$CONF_FILE"
+
+  # An incomplete file must not fall back to a guess: a missing YARN_SITE would
+  # otherwise decide nothing, while a missing MIN_UID or BANNED_USERS would
+  # decide which users this script accepts.
+  for key in "${REQUIRED_KEYS[@]}"; do
+    if [[ -z ${!key} ]]; then
+      fail "$key is not set in $CONF_FILE"
+      return 1
+    fi
+  done
   return 0
 }
 
@@ -358,17 +434,18 @@ main() {
     return $EX_USAGE
   fi
 
-  load_overrides || return $EX_UNTRUSTED_CONFIG
+  resolve_conf_file || return $EX_UNTRUSTED_CONFIG
+  load_conf || return $EX_UNTRUSTED_CONFIG
 
   # MIN_UID reaches an arithmetic context below, where bash expands array
-  # subscripts. The override file is root-owned, so this is not an escalation,
-  # but a typo should not turn into an evaluated expression.
+  # subscripts. The configuration file is root-owned, so this is not an
+  # escalation, but a typo should not turn into an evaluated expression.
   if [[ ! $MIN_UID =~ ^[0-9]+$ ]]; then
-    fail "MIN_UID in $OVERRIDE_FILE is not a number: '$MIN_UID'"
+    fail "MIN_UID in $CONF_FILE is not a number: '$MIN_UID'"
     return $EX_UNTRUSTED_CONFIG
   fi
   if [[ $YARN_SITE != /* ]]; then
-    fail "YARN_SITE in $OVERRIDE_FILE is not an absolute path: '$YARN_SITE'"
+    fail "YARN_SITE in $CONF_FILE is not an absolute path: '$YARN_SITE'"
     return $EX_UNTRUSTED_CONFIG
   fi
 
@@ -391,7 +468,7 @@ main() {
     # min.user.id and banned.users from container-executor.cfg, and honours an
     # allowed.system.users whitelist that bypasses the uid floor; this script
     # has its own MIN_UID and BANNED_USERS instead, so a cluster that tunes any
-    # of those must mirror the change in the override file.
+    # of those must mirror the change in CONF_FILE.
     local pw_uid
     if ! pw_uid=$(getent passwd "$user" | cut -d: -f3) \
         || [[ -z ${pw_uid:-} ]]; then

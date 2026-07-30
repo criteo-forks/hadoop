@@ -26,10 +26,27 @@
 #
 # Run as root:
 #
-#     /usr/libexec/hadoop-yarn/yarn-reown-orphan-app-dir-verify-setup
+#     /usr/libexec/hadoop-yarn/yarn-reown-orphan-app-dir-verify-setup \
+#       --nm-user yarn
 #
 # Exits 0 only when every check passed, so it can gate a puppet run or a canary
 # rollout. Each FAIL is followed by its remediation.
+#
+# WHERE IT LOOKS
+#
+# This script expects to be deployed in the same directory as the re-own script
+# and its configuration file, and derives both paths from its own location. That
+# way a site that deploys somewhere other than /usr/libexec/hadoop-yarn never
+# has to edit or template this file - which matters, because this is the file
+# that gates the rollout, so it should stay byte-identical to what was reviewed.
+#
+# yarn-site.xml is deliberately not defaulted either: the re-own script reads
+# the one named by YARN_SITE in its configuration file, so that is where this
+# script reads it from too. Checking a different yarn-site.xml than the one the
+# helper will actually read is exactly the silent failure this script exists to
+# catch. --nm-user has no default for the same reason: guessing "yarn" would
+# make every sudo check below vacuous on a cluster that runs the NodeManager as
+# something else.
 #
 ###############################################################################
 
@@ -42,13 +59,33 @@ export LC_ALL
 
 readonly PROG=yarn-reown-orphan-app-dir-verify-setup
 
-# Defaults mirror yarn-reown-orphan-app-dir and the documented deployment.
-REOWN_SCRIPT=/usr/libexec/hadoop-yarn/yarn-reown-orphan-app-dir
-SUDOERS_FILE=/etc/sudoers.d/yarn-reown-orphan-app-dir
-YARN_SITE=/etc/hadoop/conf/yarn-site.xml
-OVERRIDE_FILE=/etc/yarn-reown-orphan-app-dir.conf
-NM_USER=yarn
+readonly REOWN_PROG=yarn-reown-orphan-app-dir
+
+# Note that -e is deliberately not set in this script - a failed check must not
+# abort the run - so this failure is handled by hand.
+if ! SELF=$(realpath -e -- "${BASH_SOURCE[0]}" 2>/dev/null); then
+  printf 'FAIL  cannot resolve the path of this script (%s)\n' "${BASH_SOURCE[0]}"
+  printf '      -> install realpath (package coreutils); every path below is\n'
+  printf "         derived from this script's own location\n"
+  exit 1
+fi
+readonly SELF_DIR=$(dirname -- "$SELF")
+
+# Derived from this script's own location, not hard-coded, so that this file
+# never needs editing at deploy time. --script overrides it, and the
+# configuration file follows whatever --script names.
+REOWN_SCRIPT=$SELF_DIR/$REOWN_PROG
+# Fixed: sudo reads drop-ins from /etc/sudoers.d and nowhere else.
+SUDOERS_FILE=/etc/sudoers.d/$REOWN_PROG
+# Empty until the option loop and the configuration file have been read.
+CONF_FILE=""
+YARN_SITE=""
+YARN_SITE_SOURCE=""
+NM_USER=""
 DO_SCAN=0
+
+# Same keys, and same "all of them are required", as the re-own script.
+readonly REQUIRED_KEYS=(YARN_SITE NM_GROUP_FALLBACK MIN_UID BANNED_USERS)
 
 fails=0
 warns=0
@@ -75,11 +112,21 @@ Verifies the deployment of yarn-reown-orphan-app-dir. Read-only: never changes
 anything, safe to re-run on a production node. Must run as root, because it
 reads the 0440 sudoers file and the 0700 re-own script.
 
+Required:
+  --nm-user USER     the account the NodeManager actually runs as. No default:
+                     guessing it would make every sudo check below vacuous on a
+                     cluster that runs the NodeManager as something else.
+
 Options:
-  --script PATH      re-own script to verify (default $REOWN_SCRIPT)
+  --script PATH      re-own script to verify
+                     (default $REOWN_SCRIPT,
+                     i.e. this script's own directory)
+  --conf PATH        configuration file to verify
+                     (default $REOWN_PROG.conf next to --script)
   --sudoers PATH     sudoers drop-in to verify (default $SUDOERS_FILE)
-  --yarn-site PATH   yarn-site.xml to verify (default $YARN_SITE)
-  --nm-user USER     NodeManager run-as user (default $NM_USER)
+  --yarn-site PATH   yarn-site.xml to verify. Defaults to whatever YARN_SITE
+                     says in the configuration file, which is what the re-own
+                     script itself reads; pass this only for an ad-hoc check.
   --scan             additionally count root-owned entries under each local
                      dir. Walks the disks, so it is opt-in.
   -h, --help         this message
@@ -88,11 +135,14 @@ Exit status: 0 when every check passed, 1 otherwise.
 EOF
 }
 
+conf_from_option=0
 while [[ $# -gt 0 ]]; do
   case $1 in
     --script)    REOWN_SCRIPT=${2:?--script needs a value}; shift 2 ;;
+    --conf)      CONF_FILE=${2:?--conf needs a value}; conf_from_option=1; shift 2 ;;
     --sudoers)   SUDOERS_FILE=${2:?--sudoers needs a value}; shift 2 ;;
-    --yarn-site) YARN_SITE=${2:?--yarn-site needs a value}; shift 2 ;;
+    --yarn-site) YARN_SITE=${2:?--yarn-site needs a value}
+                 YARN_SITE_SOURCE="--yarn-site"; shift 2 ;;
     --nm-user)   NM_USER=${2:?--nm-user needs a value}; shift 2 ;;
     --scan)      DO_SCAN=1; shift ;;
     -h|--help)   usage; exit 0 ;;
@@ -101,6 +151,25 @@ while [[ $# -gt 0 ]]; do
                  exit 1 ;;
   esac
 done
+
+# The configuration file is defined as living beside the re-own script, so
+# --script drags it along rather than silently leaving it pointing elsewhere.
+if [[ $conf_from_option -eq 0 ]]; then
+  CONF_FILE=$(dirname -- "$REOWN_SCRIPT")/$REOWN_PROG.conf
+fi
+
+# Checked before anything else: the sudoers rule, the user checks and both
+# end-to-end smoke tests are all about this account, so a run without it would
+# report a green that means nothing.
+if [[ -z $NM_USER ]]; then
+  printf 'FAIL  --nm-user is required\n'
+  printf '      -> pass the account the NodeManager actually runs as, e.g.\n'
+  printf '         %s --nm-user yarn\n' "$PROG"
+  printf '      -> it has no default because a wrong guess turns the sudoers,\n'
+  printf '         user and end-to-end checks into vacuous passes\n'
+  printf '\n%s: 1 check FAILED. Do not enable the feature yet.\n' "$PROG"
+  exit 1
+fi
 
 #
 # Checks PATH and every ancestor are root-owned with no group/other write bit.
@@ -253,10 +322,97 @@ else
        "recommended"
 fi
 
-# --- 5/6. yarn-site.xml and local dirs --------------------------------------
-if [[ ! -f $YARN_SITE ]]; then
-  fail "$YARN_SITE does not exist" \
-    "pass --yarn-site, or set YARN_SITE in $OVERRIDE_FILE for the re-own script"
+# --- 5. the configuration file ----------------------------------------------
+# It is mandatory and it names every path the re-own script uses, so it is
+# checked before yarn-site.xml: YARN_SITE is read from here unless --yarn-site
+# was given. Parsed, never sourced, exactly as the re-own script does it.
+if [[ ! -e $CONF_FILE ]]; then
+  fail "$CONF_FILE does not exist" \
+    "deploy it next to $REOWN_SCRIPT with all of" \
+    "${REQUIRED_KEYS[*]} set as KEY=value lines" \
+    "there are no built-in defaults: without it the re-own script exits 65 for" \
+    "every application and orphanedAppDirsReownFailures climbs"
+elif ! offender=$(first_untrusted_ancestor "$CONF_FILE"); then
+  fail "$CONF_FILE is not trusted: $offender" \
+    "the re-own script refuses to read it and exits 65 for every application" \
+    "chown root:root $CONF_FILE && chmod 0600 $CONF_FILE" \
+    "it decides which trees get chowned as root, so write access for any other" \
+    "account is a root escalation"
+else
+  pass "$CONF_FILE and its ancestors are root-owned, not group/other-writable"
+  conf_mode=$(stat -c '%a' "$CONF_FILE" 2>/dev/null)
+  if [[ $conf_mode != "600" ]]; then
+    warn "$CONF_FILE is mode $conf_mode, expected 600 (not writable, so not a" \
+         "hole, but stricter is documented)"
+  else
+    pass "$CONF_FILE is mode 600"
+  fi
+
+  # Same accepted-key rules as the re-own script's load_conf(). A key it
+  # rejects means it exits 65 before it does any work, so an unknown or
+  # malformed key is a FAIL here rather than a WARN.
+  conf_yarn_site=""
+  conf_seen=""
+  conf_ok=1
+  while IFS= read -r line || [[ -n $line ]]; do
+    [[ $line =~ ^[[:space:]]*(#|$) ]] && continue
+    if [[ ! $line =~ ^([A-Z_]+)=(.*)$ ]]; then
+      fail "malformed line in $CONF_FILE: $line" \
+        "the re-own script rejects it and exits 65; only KEY=value, blank and" \
+        "# comment lines are accepted"
+      conf_ok=0
+      continue
+    fi
+    key=${BASH_REMATCH[1]}
+    value=${BASH_REMATCH[2]}
+    case $key in
+      YARN_SITE|NM_GROUP_FALLBACK|MIN_UID|BANNED_USERS)
+        [[ -n $value ]] && conf_seen="$conf_seen $key"
+        [[ $key == YARN_SITE ]] && conf_yarn_site=$value
+        ;;
+      *)
+        fail "unknown key in $CONF_FILE: $key" \
+          "the re-own script rejects it and exits 65; accepted keys are" \
+          "${REQUIRED_KEYS[*]}"
+        conf_ok=0
+        ;;
+    esac
+  done < "$CONF_FILE"
+
+  missing_keys=""
+  for key in "${REQUIRED_KEYS[@]}"; do
+    [[ $conf_seen == *" $key"* ]] || missing_keys="$missing_keys $key"
+  done
+  if [[ -n $missing_keys ]]; then
+    fail "$CONF_FILE is incomplete, unset or empty:${missing_keys}" \
+      "every key is required and has no built-in default; the re-own script" \
+      "exits 65 until all of ${REQUIRED_KEYS[*]} are set"
+  elif [[ $conf_ok -eq 1 ]]; then
+    pass "$CONF_FILE sets all of ${REQUIRED_KEYS[*]}"
+  fi
+
+  if [[ -z $YARN_SITE && -n $conf_yarn_site ]]; then
+    YARN_SITE=$conf_yarn_site
+    YARN_SITE_SOURCE="YARN_SITE in $CONF_FILE"
+  fi
+fi
+
+# Which yarn-site.xml is about to be checked, and why that one. Checking a
+# different file than the one the helper will read is the silent failure this
+# script exists to catch, so it is stated rather than implied.
+if [[ -n $YARN_SITE ]]; then
+  info "verifying yarn-site.xml $YARN_SITE (from $YARN_SITE_SOURCE)"
+fi
+
+# --- 6. yarn-site.xml and local dirs ----------------------------------------
+if [[ -z $YARN_SITE ]]; then
+  fail "no yarn-site.xml to verify" \
+    "set YARN_SITE in $CONF_FILE, which is where the re-own script reads it" \
+    "from, or pass --yarn-site for an ad-hoc check" \
+    "every check that depends on it is skipped below"
+elif [[ ! -f $YARN_SITE ]]; then
+  fail "$YARN_SITE does not exist (from $YARN_SITE_SOURCE)" \
+    "fix YARN_SITE in $CONF_FILE, or pass --yarn-site"
 else
   if offender=$(first_untrusted_ancestor "$YARN_SITE"); then
     pass "$YARN_SITE and its ancestors are root-owned, not group/other-writable"
@@ -279,21 +435,9 @@ if command -v realpath >/dev/null 2>&1; then
   pass "realpath is present"
 else
   fail "realpath not found" \
-    "install coreutils; the re-own script resolves its configuration path" \
-    "before checking that every ancestor is root-owned"
-fi
-
-# The re-own script exits 65 if this file exists and is not trusted, which is
-# otherwise indistinguishable from an untrusted yarn-site.xml.
-if [[ ! -e $OVERRIDE_FILE ]]; then
-  info "no $OVERRIDE_FILE, so the built-in defaults apply"
-elif offender=$(first_untrusted_ancestor "$OVERRIDE_FILE"); then
-  pass "$OVERRIDE_FILE and its ancestors are root-owned, not group/other-writable"
-else
-  fail "$OVERRIDE_FILE is not trusted: $offender" \
-    "the re-own script refuses to read it and exits 65 for every application" \
-    "chown root:root $OVERRIDE_FILE && chmod g-w,o-w $OVERRIDE_FILE" \
-    "or delete it if it is not needed"
+    "install coreutils; the re-own script resolves its own directory to find" \
+    "$REOWN_PROG.conf, and resolves every configuration path before checking" \
+    "that its ancestors are root-owned"
 fi
 
 local_dirs_raw=""
@@ -406,8 +550,16 @@ if [[ -x $REOWN_SCRIPT ]]; then
       fail "end-to-end call exited $rc for $probe_user application_0_0" \
         "run it by hand to see the reason:" \
         "sudo -u $NM_USER sudo -n $REOWN_SCRIPT $probe_user application_0_0" \
-        "65 = untrusted configuration, 67 = no usable local dir, 1 = sudo refused"
+        "65 = missing, incomplete or untrusted configuration, 67 = no usable" \
+        "local dir, 1 = sudo refused"
     fi
+  elif [[ -z ${local_dirs_raw//[[:space:]]/} ]]; then
+    # Same severity as below: without this call nothing has exercised the whole
+    # path, whatever the reason.
+    fail "no local dirs are known, so the end-to-end call could not be made" \
+      "fix the configuration file and yarn-site.xml failures above first" \
+      "this is the check that catches a misdeployment; the others test the" \
+      "parts, not the path"
   else
     # Not a warning: this is the only check that exercises the whole path, and
     # a green run without it is exactly how a broken deployment slips through.
