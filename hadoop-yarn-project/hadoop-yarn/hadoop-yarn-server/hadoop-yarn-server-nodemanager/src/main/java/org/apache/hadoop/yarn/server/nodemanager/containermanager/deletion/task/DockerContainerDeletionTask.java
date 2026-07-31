@@ -17,6 +17,7 @@
 package org.apache.hadoop.yarn.server.nodemanager.containermanager.deletion.task;
 
 import org.apache.hadoop.yarn.proto.YarnServerNodemanagerRecoveryProtos.DeletionServiceDeleteTaskProto;
+import org.apache.hadoop.yarn.server.nodemanager.ContainerExecutor;
 import org.apache.hadoop.yarn.server.nodemanager.DeletionService;
 import org.apache.hadoop.yarn.server.nodemanager.LinuxContainerExecutor;
 
@@ -49,13 +50,26 @@ public class DockerContainerDeletionTask extends DeletionTask
 
   /**
    * Delete the specified Docker container.
+   *
+   * The task must always be marked as finished, otherwise it is never removed
+   * from the NM state store and gets replayed on every NodeManager restart,
+   * accumulating without bound.
    */
   @Override
   public void run() {
     LOG.debug("Running DeletionTask : {}", this);
-    LinuxContainerExecutor exec = ((LinuxContainerExecutor)
-        getDeletionService().getContainerExecutor());
-    exec.removeDockerContainer(containerId);
+    try {
+      ContainerExecutor exec = getDeletionService().getContainerExecutor();
+      if (exec instanceof LinuxContainerExecutor) {
+        ((LinuxContainerExecutor) exec).removeDockerContainer(containerId);
+      } else {
+        LOG.warn("Cannot remove Docker container {} : container executor is {}",
+            containerId,
+            exec == null ? "null" : exec.getClass().getSimpleName());
+      }
+    } finally {
+      deletionTaskFinished();
+    }
   }
 
   /**
