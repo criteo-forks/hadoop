@@ -22,6 +22,7 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
+import static org.junit.Assert.assertSame;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.anyBoolean;
@@ -64,6 +65,7 @@ import java.util.Set;
 import java.util.concurrent.BrokenBarrierException;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.Future;
+import java.util.concurrent.ScheduledThreadPoolExecutor;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.hadoop.util.Sets;
@@ -324,6 +326,115 @@ public class TestResourceLocalizationService {
     } finally {
       dispatcher.stop();
       delService.stop();
+    }
+  }
+
+  @Test
+  public void testOrphanedAppReaperNotScheduledByDefault() throws Exception {
+    assertEquals("Cleanup of orphaned application directories must be off"
+        + " unless explicitly enabled", 0, scheduledOrphanedAppReapers());
+  }
+
+  @Test
+  public void testOrphanedAppReaperNotScheduledWhenDisabled()
+      throws Exception {
+    conf.setBoolean(
+        YarnConfiguration.NM_ORPHANED_APP_DIRS_CLEANUP_ENABLED, false);
+    assertEquals(0, scheduledOrphanedAppReapers());
+  }
+
+  @Test
+  public void testOrphanedAppReaperScheduledWhenEnabled() throws Exception {
+    conf.setBoolean(
+        YarnConfiguration.NM_ORPHANED_APP_DIRS_CLEANUP_ENABLED, true);
+    assertEquals(1, scheduledOrphanedAppReapers());
+  }
+
+  /**
+   * With no helper configured the reaper still runs, but applications whose
+   * directories hold root-owned content are left alone rather than being pushed
+   * through a cleanup chain that cannot delete them.
+   */
+  @Test
+  public void testNoReownerByDefault() throws Exception {
+    assertSame(AppDirReowner.NOOP, initializedService().createAppDirReowner());
+  }
+
+  @Test
+  public void testSudoReownerWhenCommandConfigured() throws Exception {
+    conf.set(YarnConfiguration.NM_ORPHANED_APP_DIRS_REOWN_COMMAND,
+        "/usr/libexec/hadoop-yarn/yarn-reown-orphan-app-dir");
+    AppDirReowner reowner = initializedService().createAppDirReowner();
+    assertTrue("Expected the sudo-based helper, got " + reowner,
+        reowner instanceof AppDirReowner.SudoAppDirReowner);
+    assertTrue("The command must be visible for operators to correlate with"
+        + " their deployment: " + reowner,
+        reowner.toString().contains("yarn-reown-orphan-app-dir"));
+  }
+
+  /**
+   * A service whose serviceInit has run, so that it has read the configuration.
+   */
+  private ResourceLocalizationService initializedService() throws Exception {
+    AsyncDispatcher dispatcher = new AsyncDispatcher();
+    dispatcher.init(new Configuration());
+
+    conf.setStrings(YarnConfiguration.NM_LOCAL_DIRS,
+        lfs.makeQualified(new Path(basedir, "0")).toString());
+    LocalDirsHandlerService diskhandler = new LocalDirsHandlerService();
+    diskhandler.init(conf);
+
+    ResourceLocalizationService locService =
+        spy(new ResourceLocalizationService(dispatcher,
+            mock(ContainerExecutor.class), mock(DeletionService.class),
+            diskhandler, nmContext, metrics));
+    doReturn(lfs)
+        .when(locService).getLocalFileContext(isA(Configuration.class));
+    try {
+      dispatcher.start();
+      locService.init(conf);
+      return locService;
+    } finally {
+      locService.stop();
+      dispatcher.stop();
+    }
+  }
+
+  /**
+   * Initializes the service with the current conf and returns how many tasks
+   * scheduling the orphaned application directory scan added to the
+   * cache-cleanup scheduler. serviceInit is what reads the configuration;
+   * scheduling normally happens in serviceStart, alongside the cache cleanup.
+   */
+  private int scheduledOrphanedAppReapers() throws Exception {
+    AsyncDispatcher dispatcher = new AsyncDispatcher();
+    dispatcher.init(new Configuration());
+
+    ContainerExecutor exec = mock(ContainerExecutor.class);
+    DeletionService delService = mock(DeletionService.class);
+
+    conf.setStrings(YarnConfiguration.NM_LOCAL_DIRS,
+        lfs.makeQualified(new Path(basedir, "0")).toString());
+    LocalDirsHandlerService diskhandler = new LocalDirsHandlerService();
+    diskhandler.init(conf);
+
+    ResourceLocalizationService locService =
+        spy(new ResourceLocalizationService(dispatcher, exec, delService,
+            diskhandler, nmContext, metrics));
+    doReturn(lfs)
+        .when(locService).getLocalFileContext(isA(Configuration.class));
+    try {
+      dispatcher.start();
+      locService.init(conf);
+
+      ScheduledThreadPoolExecutor scheduler =
+          (ScheduledThreadPoolExecutor) locService.cacheCleanup;
+      int before = scheduler.getQueue().size();
+      locService.scheduleOrphanedAppReaper();
+      return scheduler.getQueue().size() - before;
+    } finally {
+      locService.stop();
+      dispatcher.stop();
     }
   }
 
