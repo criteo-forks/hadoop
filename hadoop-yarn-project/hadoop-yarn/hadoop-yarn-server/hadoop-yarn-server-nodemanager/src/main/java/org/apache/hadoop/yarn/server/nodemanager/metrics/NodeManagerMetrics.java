@@ -102,6 +102,9 @@ public class NodeManagerMetrics {
   MutableGaugeFloat nodeGpuUtilization;
   @Metric("Current running apps")
   MutableGaugeInt applicationsRunning;
+  @Metric("Orphaned application directories whose ownership could not be"
+      + " restored, so they could not be deleted")
+  MutableCounterLong orphanedAppDirsReownFailures;
 
   @Metric("Missed localization requests in bytes")
       MutableCounterLong localizedCacheMissBytes;
@@ -195,6 +198,16 @@ public class NodeManagerMetrics {
 
   public void endRunningApplication() {
     applicationsRunning.decr();
+  }
+
+  /**
+   * An orphaned application directory could not be made deletable. A sustained
+   * increase means the privileged re-own helper is misdeployed - most often a
+   * missing sudoers rule, or a configuration file the helper does not trust -
+   * and those directories are accumulating on disk.
+   */
+  public void orphanedAppDirsReownFailure() {
+    orphanedAppDirsReownFailures.incr();
   }
 
   public void pausedContainer() {
@@ -303,6 +316,16 @@ public class NodeManagerMetrics {
 
   public int getRunningContainers() {
     return containersRunning.value();
+  }
+
+  @VisibleForTesting
+  public int getRunningApplications() {
+    return applicationsRunning.value();
+  }
+
+  @VisibleForTesting
+  public long getOrphanedAppDirsReownFailures() {
+    return orphanedAppDirsReownFailures.value();
   }
 
   public int getPausedContainers() {
