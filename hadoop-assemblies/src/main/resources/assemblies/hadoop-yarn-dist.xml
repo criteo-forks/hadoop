@@ -43,6 +43,8 @@
       <includes>
         <include>yarn-config.sh</include>
         <include>yarn-config.cmd</include>
+        <include>yarn-reown-orphan-app-dir</include>
+        <include>yarn-reown-orphan-app-dir-verify-setup</include>
       </includes>
       <fileMode>0755</fileMode>
     </fileSet>
