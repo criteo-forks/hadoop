@@ -18,7 +18,8 @@
 
 package org.apache.hadoop.hdfs.server.balancer;
 
-import static org.junit.Assert.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
 import java.net.URI;
@@ -45,8 +46,8 @@ import org.apache.hadoop.hdfs.protocol.LocatedBlocks;
 import org.apache.hadoop.hdfs.server.blockmanagement.BlockPlacementPolicyWithPlacementGroup;
 import org.apache.hadoop.net.NetworkTopology;
 import org.apache.hadoop.net.NetworkTopologyWithNodeGroup;
-import org.junit.Assert;
-import org.junit.Test;
+import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.Timeout;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -192,7 +193,7 @@ public class TestBalancerWithPlacementGroup {
     // start rebalancing
     Collection<URI> namenodes = DFSUtil.getInternalNsRpcUris(conf);
     final int r = Balancer.run(namenodes, BalancerParameters.DEFAULT, conf);
-    Assert.assertTrue(r == ExitStatus.SUCCESS.getExitCode() ||
+    assertTrue(r == ExitStatus.SUCCESS.getExitCode() ||
         (r == ExitStatus.NO_MOVE_PROGRESS.getExitCode()));
     waitForHeartBeat(totalUsedSpace, totalCapacity);
     LOG.info("Rebalancing with default factor.");
@@ -215,7 +216,8 @@ public class TestBalancerWithPlacementGroup {
    * Create a cluster with even distribution, and a new empty node is added to
    * the cluster, then test rack locality for balancer policy. 
    */
-  @Test(timeout = 60000)
+  @Test
+  @Timeout(60)
   public void testBalancerWithRackLocality() throws Exception {
     Configuration conf = createConf();
     long[] capacities = new long[] {CAPACITY, CAPACITY};
@@ -273,7 +275,8 @@ public class TestBalancerWithPlacementGroup {
    * Create a cluster with even distribution, and a new empty node is added to
    * the cluster, then test node-group locality for balancer policy.
    */
-  @Test(timeout = 60000)
+  @Test
+  @Timeout(60)
   public void testBalancerWithNodeGroup() throws Exception {
     Configuration conf = createConf();
     long[] capacities = new long[] {CAPACITY, CAPACITY, CAPACITY, CAPACITY};
@@ -327,7 +330,8 @@ public class TestBalancerWithPlacementGroup {
    * to n0 or n1 as balancer policy with node group. Thus, we expect the balancer
    * to end in 5 iterations without move block process.
    */
-  @Test(timeout = 60000)
+  @Test
+  @Timeout(60)
   public void testBalancerEndInNoMoveProgress() throws Exception {
     Configuration conf = createConf();
     long[] capacities = new long[] {CAPACITY, CAPACITY, CAPACITY, CAPACITY};
