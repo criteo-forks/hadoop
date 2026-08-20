@@ -18,10 +18,10 @@
 
 package org.apache.hadoop.yarn.server.nodemanager.containermanager.localizer;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertNotNull;
-import static org.junit.Assert.assertNull;
-import static org.junit.Assert.assertTrue;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNotNull;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
@@ -62,9 +62,9 @@ import org.apache.hadoop.yarn.server.nodemanager.metrics.NodeManagerMetrics;
 import org.apache.hadoop.yarn.server.nodemanager.recovery.NMNullStateStoreService;
 import org.apache.hadoop.yarn.server.nodemanager.security.NMTokenSecretManagerInNM;
 import org.apache.hadoop.yarn.server.security.ApplicationACLsManager;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 /**
  * Tests the selection rules of {@link OrphanedAppReaper}: which application
@@ -96,7 +96,7 @@ public class TestOrphanedAppReaper {
   private NodeManagerMetrics metrics;
   private RecordingReowner reowner;
 
-  @Before
+  @BeforeEach
   public void setup() throws IOException {
     FileUtils.deleteDirectory(basedir);
     assertTrue(basedir.mkdirs());
@@ -131,7 +131,7 @@ public class TestOrphanedAppReaper {
     });
   }
 
-  @After
+  @AfterEach
   public void cleanup() throws IOException {
     FileUtils.deleteDirectory(basedir);
   }
@@ -148,7 +148,7 @@ public class TestOrphanedAppReaper {
     // Registered before the dispatch, otherwise the event would be routed to
     // an absent application and dropped.
     Application app = applications.get(appId(1));
-    assertNotNull("Application was not registered with the context", app);
+    assertNotNull(app, "Application was not registered with the context");
     assertEquals("alice", app.getUser());
   }
 
@@ -306,8 +306,8 @@ public class TestOrphanedAppReaper {
 
     assertEquals(1, reaper.reap());
     assertEquals(Arrays.asList(appId(2)), cleanedUp());
-    assertNull("A dir that could not be listed produced a candidate",
-        applications.get(appId(1)));
+    assertNull(applications.get(appId(1)),
+        "A dir that could not be listed produced a candidate");
   }
 
   /**
@@ -340,8 +340,8 @@ public class TestOrphanedAppReaper {
     applications.put(appId(1), mock(Application.class));
 
     assertEquals(0, reaper(NO_CAP).reap());
-    assertTrue("A live or too-young application was handed to the helper",
-        reowner.calls.isEmpty());
+    assertTrue(reowner.calls.isEmpty(),
+        "A live or too-young application was handed to the helper");
   }
 
   /**
@@ -359,10 +359,10 @@ public class TestOrphanedAppReaper {
 
     assertEquals(0, reaper(NO_CAP).reap());
     assertEquals(Arrays.asList("alice " + appId(1)), reowner.calls);
-    assertTrue("Cleanup was dispatched for a directory that cannot be deleted",
-        dispatched.isEmpty());
-    assertTrue("A synthetic application was left in the applications map",
-        applications.isEmpty());
+    assertTrue(dispatched.isEmpty(),
+        "Cleanup was dispatched for a directory that cannot be deleted");
+    assertTrue(applications.isEmpty(),
+        "A synthetic application was left in the applications map");
     verify(metrics).orphanedAppDirsReownFailure();
   }
 
@@ -444,8 +444,8 @@ public class TestOrphanedAppReaper {
       assertEquals(1, reaper.reap());
       realDispatcher.await();
 
-      assertTrue("Application was not removed from the applications map",
-          applications.isEmpty());
+      assertTrue(applications.isEmpty(),
+          "Application was not removed from the applications map");
       assertEquals(before, metrics.getRunningApplications());
     } finally {
       realDispatcher.stop();
@@ -557,8 +557,8 @@ public class TestOrphanedAppReaper {
    * creating a child updates the parent's modification time.
    */
   private File touch(File dir, long ageMs) {
-    assertTrue("Unable to backdate " + dir,
-        dir.setLastModified(System.currentTimeMillis() - ageMs));
+    assertTrue(dir.setLastModified(System.currentTimeMillis() - ageMs),
+        "Unable to backdate " + dir);
     return dir;
   }
 
