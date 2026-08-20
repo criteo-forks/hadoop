@@ -510,8 +510,12 @@ public final class DistCpOptions {
       this.targetPath = that.getTargetPath();
       this.filtersFile = that.getFiltersFile();
       this.useIterator = that.useIterator;
+      this.updateRoot = that.updateRoot;
     } else {
-      this.useIterator = false; //required because useIterator is final. Keep the default value of the builder.
+      //required because useIterator and updateRoot are final.
+      //Keep the default values of the builder.
+      this.useIterator = false;
+      this.updateRoot = false;
     }
   }
 
@@ -528,6 +532,7 @@ public final class DistCpOptions {
     this.sourcePaths = sourcePaths;
     this.targetPath = targetPath;
     this.useIterator = false;
+    this.updateRoot = false;
   }
 
   /**
@@ -542,6 +547,7 @@ public final class DistCpOptions {
     this.sourceFileListing = sourceFileListing;
     this.targetPath = targetPath;
     this.useIterator = false;
+    this.updateRoot = false;
   }
 
   /**

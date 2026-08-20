@@ -19,9 +19,9 @@
 package org.apache.hadoop.util;
 
 import org.apache.hadoop.util.DiskChecker.DiskErrorException;
-import org.junit.After;
-import org.junit.Before;
-import org.junit.Test;
+import org.junit.jupiter.api.AfterEach;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Test;
 
 import java.io.File;
 import java.nio.file.Files;
@@ -30,8 +30,8 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
-import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.fail;
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.fail;
 
 /**
  * The class to test {@link ReadWriteDiskValidator} and
@@ -41,13 +41,13 @@ public class TestCriteoReadWriteDiskValidator {
 
   private File testDir;
 
-  @Before
+  @BeforeEach
   public void setUp() throws Exception {
     testDir = Files.createTempDirectory(
             Paths.get(System.getProperty("test.build.data")), "test").toFile();
   }
 
-  @After
+  @AfterEach
   public void tearDown() throws Exception {
     testDir.delete();
   }
