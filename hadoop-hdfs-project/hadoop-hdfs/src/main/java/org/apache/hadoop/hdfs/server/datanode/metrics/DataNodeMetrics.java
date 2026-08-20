@@ -370,7 +370,6 @@ public class DataNodeMetrics {
     });
     bytesWrittenPerBlockPoolId.get(blockPoolId).incr(delta);
   }
-  }
 
   public void incrBytesWritten(int delta) {
     bytesWritten.incr(delta);
