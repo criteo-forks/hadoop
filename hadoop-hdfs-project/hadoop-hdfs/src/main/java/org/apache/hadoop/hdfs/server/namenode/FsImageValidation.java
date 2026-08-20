@@ -259,7 +259,7 @@ public class FsImageValidation {
       final FSImage fsImage = new FSImage(conf);
       namesystem = new FSNamesystem(conf, fsImage, true);
       // Avoid saving fsimage
-      namesystem.setRollingUpgradeInfo(false, 0);
+      namesystem.setRollingUpgradeInfo(false, 0, 0, 0);
 
       namesystem.loadFSImage(HdfsServerConstants.StartupOption.REGULAR);
     } else {

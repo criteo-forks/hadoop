@@ -829,8 +829,8 @@ class BPOfferService {
 
   enum Throttler {
     BALANCE(0, 0x1FFF, "balance", dxcs -> dxcs.balanceThrottler),
-    TRANSFER(13, 0x1FFF, "transfer", dxcs -> dxcs.getTransferThrottler(null)),
-    WRITE(26, 0x1FFF, "write", dxcs -> dxcs.getWriteThrottler(null));
+    TRANSFER(13, 0x1FFF, "transfer", dxcs -> dxcs.getTransferThrottler()),
+    WRITE(26, 0x1FFF, "write", dxcs -> dxcs.getWriteThrottler());
   
     private final int shift;
     private final long mask;
