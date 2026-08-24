@@ -48,6 +48,18 @@ endif (MSVC)
 list(APPEND CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/../../../hadoop-common-project/hadoop-common)
 include(HadoopCommon)
 
+# GCC 8 ships std::filesystem in a separate lib; link it after dependent objects.
+set(HADOOP_NEED_STDCXXFS FALSE)
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "9.0")
+  set(HADOOP_NEED_STDCXXFS TRUE)
+endif()
+
+function(hadoop_maybe_link_stdcxxfs TARGET)
+  if(HADOOP_NEED_STDCXXFS AND TARGET ${TARGET})
+    target_link_libraries(${TARGET} stdc++fs)
+  endif()
+endfunction()
+
 # Check to see if our compiler and linker support the __thread attribute.
 # On Linux and some other operating systems, this is a more efficient
 # alternative to POSIX thread local storage.
@@ -121,7 +133,8 @@ function(add_libhdfs_test NAME LIBRARY)
 endfunction()
 
 function(link_libhdfs_test NAME LIBRARY)
-target_link_libraries("${NAME}_${LIBRARY}" ${LIBRARY} ${ARGN})
+  target_link_libraries("${NAME}_${LIBRARY}" ${LIBRARY} ${ARGN})
+  hadoop_maybe_link_stdcxxfs("${NAME}_${LIBRARY}")
 endfunction()
 
 

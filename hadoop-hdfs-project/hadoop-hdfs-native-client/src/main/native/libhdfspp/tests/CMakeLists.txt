@@ -140,6 +140,15 @@ target_include_directories(hdfs_config_connect_bugs_test PRIVATE ../lib)
 target_link_libraries(hdfs_config_connect_bugs_test common gmock_main bindings_c fs rpc proto common reader connection ${PROTOBUF_LIBRARIES} ${OPENSSL_LIBRARIES} ${SASL_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT})
 add_memcheck_test(hdfs_config_connect_bugs hdfs_config_connect_bugs_test)
 
+foreach(_libhdfspp_unit_test
+    uri_test get_jni_test remote_block_reader_test sasl_digest_md5_test
+    retry_policy_test rpc_engine_test bad_datanode_test node_exclusion_test
+    configuration_test hdfs_configuration_test hdfspp_errors_test
+    hdfs_builder_test logging_test hdfs_ioservice_test user_lock_test
+    hdfs_config_connect_bugs_test)
+  hadoop_maybe_link_stdcxxfs(${_libhdfspp_unit_test})
+endforeach()
+
 
 #
 #

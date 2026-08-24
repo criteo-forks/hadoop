@@ -51,6 +51,10 @@ hadoop_target_link_dual_libraries(hdfs
     ${LIB_DL}
     ${OS_LINK_LIBRARIES}
 )
+if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "9.0")
+  target_link_libraries(hdfs stdc++fs)
+  target_link_libraries(hdfs_static stdc++fs)
+endif()
 
 hadoop_dual_output_directory(hdfs ${OUT_DIR})
 set(LIBHDFS_VERSION "0.0.0")

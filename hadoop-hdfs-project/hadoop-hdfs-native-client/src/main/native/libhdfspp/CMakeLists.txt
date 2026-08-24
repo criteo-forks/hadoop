@@ -284,6 +284,10 @@ if (HADOOP_BUILD AND NOT MSVC)
     ${SASL_LIBRARIES}
     ${CMAKE_THREAD_LIBS_INIT}
     ${Boost_LIBRARIES})
+  if(CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND CMAKE_CXX_COMPILER_VERSION VERSION_LESS "9.0")
+    target_link_libraries(hdfspp stdc++fs)
+    target_link_libraries(hdfspp_static stdc++fs)
+  endif()
   set_target_properties(hdfspp PROPERTIES SOVERSION ${LIBHDFSPP_VERSION})
   hadoop_dual_output_directory(hdfspp ${OUT_DIR})
 else (HADOOP_BUILD AND NOT MSVC)
