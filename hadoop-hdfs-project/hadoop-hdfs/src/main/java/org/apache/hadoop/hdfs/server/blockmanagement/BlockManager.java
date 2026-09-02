@@ -5459,7 +5459,16 @@ public class BlockManager implements BlockStatsMXBean {
     return i;
   }
 
-  private static long getBlockRecoveryTimeout(long heartbeatIntervalSecs) {
+  /**
+   * The window during which {@link #addBlockRecoveryAttempt} rejects a repeat
+   * attempt for the same block. Public so that tools driving
+   * {@code recoverLease} from outside the NameNode can space their retries
+   * without duplicating the computation.
+   *
+   * @param heartbeatIntervalSecs value of {@code dfs.heartbeat.interval}
+   * @return the block recovery timeout, in milliseconds
+   */
+  public static long getBlockRecoveryTimeout(long heartbeatIntervalSecs) {
     return TimeUnit.SECONDS.toMillis(heartbeatIntervalSecs *
         BLOCK_RECOVERY_TIMEOUT_MULTIPLIER);
   }
