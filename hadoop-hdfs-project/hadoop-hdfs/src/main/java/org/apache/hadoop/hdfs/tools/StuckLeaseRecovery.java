@@ -469,8 +469,14 @@ public class StuckLeaseRecovery extends Configured implements Tool {
 
     HAServiceProtocol proxy = null;
     try {
-      proxy = new NNHAServiceTarget(conf, local.nsId, local.nnId)
-          .getProxy(conf, HA_RPC_TIMEOUT_MS);
+      // HAServiceProtocol takes the server principal from
+      // hadoop.security.service.user.name.key, which no config file sets;
+      // DFSHAAdmin populates it from dfs.namenode.kerberos.principal, and
+      // without it SASL fails with "Failed to specify server's Kerberos
+      // principal name".
+      Configuration haConf = DFSHAAdmin.addSecurityConfiguration(conf);
+      proxy = new NNHAServiceTarget(haConf, local.nsId, local.nnId)
+          .getProxy(haConf, HA_RPC_TIMEOUT_MS);
       HAServiceState state = proxy.getServiceStatus().getState();
       System.out.println("Local NameNode " + local + " is " + state + ".");
       return state == HAServiceState.ACTIVE
