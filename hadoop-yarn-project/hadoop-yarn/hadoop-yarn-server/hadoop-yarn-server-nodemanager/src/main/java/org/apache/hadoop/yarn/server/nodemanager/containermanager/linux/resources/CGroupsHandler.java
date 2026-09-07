@@ -245,4 +245,10 @@ public interface CGroupsHandler {
    * @return parameter value as read from the parameter file
    */
   String getCGroupV2MountPath();
+
+  /**
+   * Tells the cgroup version this handler talks to.
+   * @return true for a cgroup v2 handler, false for a cgroup v1 handler
+   */
+  boolean isCGroupsV2();
 }

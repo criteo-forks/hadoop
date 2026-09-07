@@ -161,4 +161,9 @@ class CGroupsHandlerImpl extends AbstractCGroupsHandler {
       File yarnHierarchy, CGroupController controller) {
     // no-op in cgroup v1
   }
+
+  @Override
+  public boolean isCGroupsV2() {
+    return false;
+  }
 }

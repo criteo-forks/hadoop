@@ -125,13 +125,26 @@ public class ResourceHandlerModule {
     return (cGroupV2Handler != null && cGroupV2Handler.getControllerPath(controller) != null);
   }
 
+  public static boolean isCGroupsV2Enabled() {
+    return cgroupsV2Enabled;
+  }
+
   /**
    * Returns a (possibly null) reference to a cGroupsHandler. This handler is
    * non-null only if one or more of the known cgroups-based resource
    * handlers are in use and have been initialized.
+   * The handler that serves the memory controller is returned: the callers
+   * (docker cgroup parent, container executor cgroup root, resource
+   * calculator, elastic memory control) all work on the hierarchy where the
+   * memory limits are set. On a pure v2 node the v1 handler is never
+   * initialized, so returning it unconditionally would return null.
    */
 
   public static CGroupsHandler getCGroupsHandler() {
+    if (cgroupsV2Enabled
+        && isMountedInCGroupsV2(CGroupsHandler.CGroupController.MEMORY)) {
+      return cGroupV2Handler;
+    }
     return cGroupV1Handler;
   }
 
@@ -402,6 +415,23 @@ public class ResourceHandlerModule {
   @VisibleForTesting
   static void nullifyResourceHandlerChain() throws ResourceHandlerException {
     resourceHandlerChain = null;
+  }
+
+  /**
+   * Drops the cached cgroup handlers so that a subsequent
+   * {@link #getConfiguredResourceHandlerChain} re-reads the mount
+   * configuration. Only meant for tests, the handlers are static singletons
+   * for the lifetime of a NodeManager.
+   */
+  @VisibleForTesting
+  static void nullifyCGroupHandlers() {
+    cGroupV1Handler = null;
+    cGroupV2Handler = null;
+    cGroupsMemoryResourceHandler = null;
+    cGroupsCpuResourceHandler = null;
+    cGroupsBlkioResourceHandler = null;
+    trafficControlBandwidthHandler = null;
+    networkPacketTaggingHandlerImpl = null;
   }
 
   /**

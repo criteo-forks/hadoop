@@ -233,4 +233,9 @@ class CGroupsV2HandlerImpl extends AbstractCGroupsHandler {
           yarnHierarchy.getAbsolutePath()));
     }
   }
+
+  @Override
+  public boolean isCGroupsV2() {
+    return true;
+  }
 }
