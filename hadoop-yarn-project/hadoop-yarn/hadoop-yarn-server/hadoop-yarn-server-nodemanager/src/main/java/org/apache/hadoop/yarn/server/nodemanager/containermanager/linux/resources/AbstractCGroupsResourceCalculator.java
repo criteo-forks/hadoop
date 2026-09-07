@@ -28,6 +28,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -57,19 +58,19 @@ public abstract class AbstractCGroupsResourceCalculator extends ResourceCalculat
   private String procFs = "/proc";
 
   private final List<String> totalJiffiesKeys;
-  private final String rssMemoryKey;
+  private final List<String> rssMemoryKeys;
   private final String virtualMemoryKey;
 
   protected AbstractCGroupsResourceCalculator(
       String pid,
       List<String> totalJiffiesKeys,
-      String rssMemoryKey,
+      List<String> rssMemoryKeys,
       String virtualMemoryKey
   ) {
     super(pid);
     this.pid = pid;
     this.totalJiffiesKeys = totalJiffiesKeys;
-    this.rssMemoryKey = rssMemoryKey;
+    this.rssMemoryKeys = rssMemoryKeys;
     this.virtualMemoryKey = virtualMemoryKey;
   }
 
@@ -89,7 +90,7 @@ public abstract class AbstractCGroupsResourceCalculator extends ResourceCalculat
 
   @Override
   public long getRssMemorySize(int olderThanAge) {
-    return 1 < olderThanAge ? UNAVAILABLE : getStat(rssMemoryKey);
+    return 1 < olderThanAge ? UNAVAILABLE : getStatSum(rssMemoryKeys);
   }
 
   @Override
@@ -155,6 +156,19 @@ public abstract class AbstractCGroupsResourceCalculator extends ResourceCalculat
         .filter(statValue -> statValue != UNAVAILABLE)
         .reduce(0L, Long::sum);
     return reduce == 0 ? UNAVAILABLE : reduce;
+  }
+
+  /**
+   * Sums the available values of the given keys. Unlike
+   * {@link #getTotalJiffies()} a sum of 0 is a legitimate value here, so
+   * UNAVAILABLE is only returned when none of the keys could be read.
+   */
+  private long getStatSum(List<String> keys) {
+    List<Long> values = keys.stream()
+        .map(this::getStat)
+        .filter(statValue -> statValue != UNAVAILABLE)
+        .collect(Collectors.toList());
+    return values.isEmpty() ? UNAVAILABLE : values.stream().reduce(0L, Long::sum);
   }
 
   private long getStat(String key) {

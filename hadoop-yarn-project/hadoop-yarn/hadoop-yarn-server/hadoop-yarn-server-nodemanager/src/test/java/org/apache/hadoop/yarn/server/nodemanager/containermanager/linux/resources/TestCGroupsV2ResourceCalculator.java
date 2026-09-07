@@ -68,8 +68,12 @@ public class TestCGroupsV2ResourceCalculator {
 
     writeToFile("proc/42/cgroup",
         "0::/container_1");
+    // slab is a decoy: it is part of kernel, which is reported on its own
+    // line, and must not be summed a second time.
     writeToFile("mount/cgroup2/yarn/container_1/memory.stat",
         "anon 22000",
+        "file_mapped 3000",
+        "kernel 5000",
         "slab 1774128");
     writeToFile("mount/cgroup2/yarn/container_1/memory.swap.current",
         "11000");
@@ -86,10 +90,38 @@ public class TestCGroupsV2ResourceCalculator {
     calculator.updateProcessTree();
 
     assertEquals(333000L, calculator.getCumulativeCpuTime(), 0L);
-    assertEquals(22000L, calculator.getRssMemorySize(), 0L);
+    // anon + file_mapped + kernel
+    assertEquals(30000L, calculator.getRssMemorySize(), 0L);
     assertEquals(11000L, calculator.getVirtualMemorySize(), 0L);
     assertEquals(-1L, calculator.getRssMemorySize(2), 0L);
     assertEquals(-1L, calculator.getVirtualMemorySize(2), 0L);
+  }
+
+  /**
+   * The kernel key only exists since Linux 5.18, the measure has to degrade
+   * to anon + file_mapped instead of becoming unavailable.
+   */
+  @Test
+  public void readFilesWithoutKernelMemory() throws IOException {
+    Files.createDirectories(root.resolve("proc/42"));
+    Files.createDirectories(root.resolve("mount/cgroup2/yarn/container_1"));
+
+    writeToFile("proc/42/cgroup",
+        "0::/container_1");
+    writeToFile("mount/cgroup2/yarn/container_1/memory.stat",
+        "anon 22000",
+        "file_mapped 3000",
+        "slab 1774128");
+
+    CGroupsV2ResourceCalculator calculator = createCalculator();
+    when(calculator.getcGroupsHandler().getCGroupV2MountPath())
+        .thenReturn(root.resolve("mount/cgroup2/yarn").toString());
+    when(calculator.getcGroupsHandler().getRelativePathForCGroup(eq("/container_1")))
+        .thenReturn("container_1");
+
+    calculator.updateProcessTree();
+
+    assertEquals(25000L, calculator.getRssMemorySize(), 0L);
   }
 
   private CGroupsV2ResourceCalculator createCalculator() {

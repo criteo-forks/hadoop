@@ -23,6 +23,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.stream.Stream;
@@ -89,10 +90,31 @@ public class CGroupsV2ResourceCalculator extends AbstractCGroupsResourceCalculat
    *  ...
    *  anon
    *   Amount of memory used in anonymous mappings such as brk(), sbrk(), and mmap(MAP_ANONYMOUS)
+   *  file_mapped
+   *   Amount of cached filesystem data mapped with mmap()
+   *  kernel (since Linux 5.18)
+   *   Amount of total kernel memory, including (kernel_stack, pagetables,
+   *   percpu, vmalloc, slab) in addition to other kernel memory use cases
    * ...
    *
    */
-  private static final String MEM_STAT = "memory.stat#anon";
+  private static final String MEM_STAT = "memory.stat";
+
+  /**
+   * The cgroup v1 names of these counters are rss, mapped_file and
+   * memory.kmem.usage_in_bytes: the memory a container really needs under
+   * pressure, page cache excluded. See the "A proper memory measure for
+   * cgroup based memory management on Yarn" design note and
+   * {@link CGroupsResourceCalculator}. In v2 memory.stat is hierarchical by
+   * default, so there is no total_ prefixed variant to pick.
+   * On kernels older than 5.18 the kernel key is absent and the sum
+   * degrades to anon + file_mapped.
+   */
+  private static final List<String> RSS_MEMORY_KEYS = Arrays.asList(
+      MEM_STAT + "#anon",
+      MEM_STAT + "#file_mapped",
+      MEM_STAT + "#kernel"
+  );
 
   /**
    * <a href="https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files">DOC</a>
@@ -110,7 +132,7 @@ public class CGroupsV2ResourceCalculator extends AbstractCGroupsResourceCalculat
     super(
         pid,
         Collections.singletonList(CPU_STAT),
-        MEM_STAT,
+        RSS_MEMORY_KEYS,
         MEMSW_STAT
     );
   }

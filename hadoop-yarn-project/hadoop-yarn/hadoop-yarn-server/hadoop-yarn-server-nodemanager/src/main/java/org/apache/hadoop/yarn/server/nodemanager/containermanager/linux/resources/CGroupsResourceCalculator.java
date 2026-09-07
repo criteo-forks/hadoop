@@ -91,25 +91,49 @@ public class CGroupsResourceCalculator extends AbstractCGroupsResourceCalculator
   private static final String CPU_STAT = "cpuacct.stat";
 
   /**
-   * <a href="https://docs.kernel.org/admin-guide/cgroup-v1/memory.html#usage-in-bytes">DOC</a>
+   * <a href="https://docs.kernel.org/admin-guide/cgroup-v1/memory.html#stat-file">DOC</a>
    *
    * ...
-   * For efficiency, as other kernel components, memory cgroup uses some optimization
-   * to avoid unnecessary cacheline false sharing.
-   * usage_in_bytes is affected by the method
-   * and doesn’t show ‘exact’ value of memory (and swap) usage,
-   * it’s a fuzz value for efficient access. (Of course, when necessary, it’s synchronized.)
-   *  ...
+   * rss: number of bytes of anonymous and swap cache memory
+   * mapped_file: number of bytes of mapped file (includes tmpfs/shmem)
+   * total_&lt;counter&gt;: hierarchical version of &lt;counter&gt;, which in addition to
+   * the cgroup's own value includes the sum of all hierarchical children's
+   * values of &lt;counter&gt;
+   * ...
+   *
+   * The hierarchical counters are the ones we need: with Docker the container
+   * runtime nests its own cgroup below container_x.
+   */
+  private static final String MEM_STAT = "memory.stat";
+
+  /**
+   * <a href="https://docs.kernel.org/admin-guide/cgroup-v1/memory.html#kernel-memory-extension">DOC</a>
+   *
+   * ...
+   * memory.kmem.usage_in_bytes: shows current kernel memory allocation
+   * ...
    *
    */
-  private static final String MEM_STAT = "memory.usage_in_bytes";
+  private static final String KMEM_STAT = "memory.kmem.usage_in_bytes";
   private static final String MEMSW_STAT = "memory.memsw.usage_in_bytes";
+
+  /**
+   * The memory a container really needs under pressure: page cache is
+   * reclaimed first, but anonymous pages, mapped (often dirty) file pages and
+   * kernel memory are not. See the "A proper memory measure for cgroup based
+   * memory management on Yarn" design note.
+   */
+  private static final List<String> RSS_MEMORY_KEYS = Arrays.asList(
+      MEM_STAT + "#total_rss",
+      MEM_STAT + "#total_mapped_file",
+      KMEM_STAT
+  );
 
   public CGroupsResourceCalculator(String pid) {
     super(
         pid,
         Arrays.asList(CPU_STAT + "#user", CPU_STAT + "#system"),
-        MEM_STAT,
+        RSS_MEMORY_KEYS,
         MEMSW_STAT
     );
   }
@@ -135,6 +159,7 @@ public class CGroupsResourceCalculator extends AbstractCGroupsResourceCalculator
         File memDir = new File(getcGroupsHandler().getControllerPath(
             CGroupsHandler.CGroupController.MEMORY), memoryRelative);
         result.add(Paths.get(memDir.getAbsolutePath(), MEM_STAT));
+        result.add(Paths.get(memDir.getAbsolutePath(), KMEM_STAT));
         result.add(Paths.get(memDir.getAbsolutePath(), MEMSW_STAT));
       }
     } catch (IOException e) {

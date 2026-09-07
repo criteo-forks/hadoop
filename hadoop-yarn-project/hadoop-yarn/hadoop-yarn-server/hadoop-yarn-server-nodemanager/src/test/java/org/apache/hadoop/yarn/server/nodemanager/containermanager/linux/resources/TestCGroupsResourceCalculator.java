@@ -100,12 +100,29 @@ public class TestCGroupsResourceCalculator {
     calculator.updateProcessTree();
     assertEquals(90470, calculator.getCumulativeCpuTime());
 
-    writeToFile("mount/cgroup/yarn/container_1/memory.usage_in_bytes",
-        "418496512"
+    // Only a few lines of memory.stat are written, the decoys are there to
+    // check that the non hierarchical counters are skipped: the expected
+    // value must come from total_rss and total_mapped_file only.
+    writeToFile("mount/cgroup/yarn/container_1/memory.stat",
+        "cache 1000000",
+        "rss 2000000",
+        "rss_huge 0",
+        "shmem 172032",
+        "mapped_file 100000",
+        "total_cache 10000000",
+        "total_rss 20000000",
+        "total_rss_huge 4469030912",
+        "total_shmem 2412544",
+        "total_mapped_file 200000",
+        "total_dirty 1060474880"
+    );
+    writeToFile("mount/cgroup/yarn/container_1/memory.kmem.usage_in_bytes",
+        "10000"
     );
 
     calculator.updateProcessTree();
-    assertEquals(418496512, calculator.getRssMemorySize());
+    // total_rss + total_mapped_file + kernel memory
+    assertEquals(20210000, calculator.getRssMemorySize());
     assertEquals(-1, calculator.getVirtualMemorySize());
 
     writeToFile("mount/cgroup/yarn/container_1/memory.memsw.usage_in_bytes",
@@ -113,7 +130,7 @@ public class TestCGroupsResourceCalculator {
     );
 
     calculator.updateProcessTree();
-    assertEquals(418496512, calculator.getRssMemorySize());
+    assertEquals(20210000, calculator.getRssMemorySize());
     assertEquals(418496513, calculator.getVirtualMemorySize());
   }
 
