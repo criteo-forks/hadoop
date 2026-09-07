@@ -134,8 +134,69 @@ public class TestCGroupsResourceCalculator {
     assertEquals(418496513, calculator.getVirtualMemorySize());
   }
 
+  /**
+   * With docker /proc/&lt;pid&gt;/cgroup points at the cgroup the docker daemon
+   * created below the YARN container one. The statistics have to be read at
+   * the container_x level, which is the hierarchical parent of it.
+   */
+  @Test
+  public void testParsingWithDocker() throws Exception {
+    String dockerId =
+        "/de5b77f2cdf6b5e87de9c23da5bc07de0d69f010af503dcd15832a3389c31565";
+    writeToFile("proc/41/cgroup",
+        "7:devices:/yarn/container_1" + dockerId,
+        "6:cpuacct,cpu:/yarn/container_1" + dockerId,
+        "5:pids:/yarn/container_1" + dockerId,
+        "4:memory:/yarn/container_1" + dockerId
+    );
+
+    writeToFile("mount/cgroup/yarn/container_1/cpuacct.stat",
+        "user 5415",
+        "system 3632"
+    );
+    writeToFile("mount/cgroup/yarn/container_1/memory.stat",
+        "total_rss 20000000",
+        "total_mapped_file 200000"
+    );
+    writeToFile("mount/cgroup/yarn/container_1/memory.kmem.usage_in_bytes",
+        "10000"
+    );
+
+    CGroupsResourceCalculator calculator = createCalculator();
+    calculator.updateProcessTree();
+    assertEquals(90470, calculator.getCumulativeCpuTime());
+    assertEquals(20210000, calculator.getRssMemorySize());
+  }
+
+  /**
+   * Pid 1 is the availability probe of ContainersMonitorImpl, not a
+   * container: the yarn hierarchy root is read instead.
+   */
+  @Test
+  public void testParsingYarnHierarchyRoot() throws Exception {
+    writeToFile("proc/1/cgroup",
+        "7:devices:/",
+        "6:cpuacct,cpu:/",
+        "5:pids:/",
+        "4:memory:/"
+    );
+
+    writeToFile("mount/cgroup/yarn/cpuacct.stat",
+        "user 5415",
+        "system 3632"
+    );
+
+    CGroupsResourceCalculator calculator = createCalculator("1");
+    calculator.updateProcessTree();
+    assertEquals(90470, calculator.getCumulativeCpuTime());
+  }
+
   private CGroupsResourceCalculator createCalculator() {
-    CGroupsResourceCalculator calculator = new CGroupsResourceCalculator("41");
+    return createCalculator("41");
+  }
+
+  private CGroupsResourceCalculator createCalculator(String pid) {
+    CGroupsResourceCalculator calculator = new CGroupsResourceCalculator(pid);
     calculator.setCpuTimeTracker(mock(CpuTimeTracker.class));
     calculator.setcGroupsHandler(mock(CGroupsHandler.class));
     when(calculator.getcGroupsHandler().getRelativePathForCGroup("container_1"))

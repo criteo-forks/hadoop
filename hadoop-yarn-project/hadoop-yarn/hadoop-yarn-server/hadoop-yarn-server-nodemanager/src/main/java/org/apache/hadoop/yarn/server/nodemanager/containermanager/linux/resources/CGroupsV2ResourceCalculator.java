@@ -26,6 +26,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
+import java.util.regex.Matcher;
 import java.util.stream.Stream;
 
 import org.slf4j.Logger;
@@ -150,9 +151,26 @@ public class CGroupsV2ResourceCalculator extends AbstractCGroupsResourceCalculat
   }
 
   private Path getCGroupPath() throws IOException {
-    return Paths.get(
-        getcGroupsHandler().getCGroupV2MountPath(),
-        StringUtils.substringAfterLast(readLinesFromCGroupFileFromProcDir().get(0), ":")
-    );
+    String mountPath = getcGroupsHandler().getCGroupV2MountPath();
+    if (YARN_HIERARCHY_PID.equals(getPid())) {
+      // Not a container: this is the availability probe of
+      // ContainersMonitorImpl, it has to land on the yarn hierarchy root.
+      return Paths.get(mountPath, getcGroupsHandler().getRelativePathForCGroup(""));
+    }
+
+    // example line: 0::/hadoop-yarn/container_1
+    // with docker:  0::/hadoop-yarn/container_1/<64 hex characters of docker id>
+    String cGroupPath = StringUtils.substringAfterLast(
+        readLinesFromCGroupFileFromProcDir().get(0), ":");
+    // The docker child cgroup is cut off: the statistics are read at the YARN
+    // container level, which is hierarchical and so includes the docker one.
+    Matcher containerId = CONTAINER_ID_PATTERN.matcher(cGroupPath);
+    if (containerId.find()) {
+      return Paths.get(mountPath, cGroupPath.substring(0, containerId.end(1)));
+    }
+
+    LOG.error("Found no container id in the cgroup path {} of pid {}",
+        cGroupPath, getPid());
+    return Paths.get(mountPath, cGroupPath);
   }
 }

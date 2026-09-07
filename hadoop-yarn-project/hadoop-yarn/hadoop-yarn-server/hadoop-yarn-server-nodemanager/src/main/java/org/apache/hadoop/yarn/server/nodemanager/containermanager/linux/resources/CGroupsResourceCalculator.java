@@ -25,6 +25,7 @@ import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
+import java.util.regex.Matcher;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -176,10 +177,21 @@ public class CGroupsResourceCalculator extends AbstractCGroupsResourceCalculator
       String[] parts = line.split(":");
       if (parts[1].contains(controller.getName())) {
         String cgroupPath = parts[2];
-        Path fileName = new File(cgroupPath).toPath().getFileName();
-        if (fileName != null) {
-          return getcGroupsHandler().getRelativePathForCGroup(fileName.toString());
+        if (YARN_HIERARCHY_PID.equals(getPid())) {
+          // Not a container: this is the availability probe of
+          // ContainersMonitorImpl, it has to land on the yarn hierarchy root.
+          return getcGroupsHandler().getRelativePathForCGroup("");
         }
+        // With docker the path is
+        // /yarn/container_1/<64 hex characters of docker id>: taking the last
+        // component would point at the cgroup of the docker runtime instead
+        // of the YARN container one, which is the hierarchical parent of it.
+        Matcher containerId = CONTAINER_ID_PATTERN.matcher(cgroupPath);
+        if (containerId.find()) {
+          return getcGroupsHandler().getRelativePathForCGroup(containerId.group(1));
+        }
+        LOG.error("Found no container id in the cgroup path {} of pid {}",
+            cgroupPath, getPid());
       }
     }
     LOG.debug("No {} controller found for pid {}", controller, getPid());

@@ -28,6 +28,7 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
@@ -48,6 +49,23 @@ import org.apache.hadoop.yarn.util.SystemClock;
 public abstract class AbstractCGroupsResourceCalculator extends ResourceCalculatorProcessTree {
   private static final Logger LOG =
       LoggerFactory.getLogger(AbstractCGroupsResourceCalculator.class);
+
+  /**
+   * The path in /proc/&lt;pid&gt;/cgroup is the YARN container cgroup, except
+   * with docker where the container runtime nests its own cgroup below it:
+   * /hadoop-yarn/container_1/&lt;64 hex characters of docker id&gt;. The
+   * statistics have to be read at the container_x level, which is the
+   * hierarchical parent of the docker one.
+   */
+  protected static final Pattern CONTAINER_ID_PATTERN =
+      Pattern.compile("(container_[a-zA-Z0-9_]+)");
+
+  /**
+   * ContainersMonitorImpl probes the availability of the calculator with this
+   * pid. It is not a container, so the yarn hierarchy root is read instead.
+   */
+  protected static final String YARN_HIERARCHY_PID = "1";
+
   private final String pid;
   private final Clock clock = SystemClock.getInstance();
   private final Map<String, String> stats = new ConcurrentHashMap<>();

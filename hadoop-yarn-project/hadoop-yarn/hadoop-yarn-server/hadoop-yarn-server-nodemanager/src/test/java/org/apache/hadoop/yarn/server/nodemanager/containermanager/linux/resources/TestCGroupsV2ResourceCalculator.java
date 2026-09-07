@@ -124,8 +124,66 @@ public class TestCGroupsV2ResourceCalculator {
     assertEquals(25000L, calculator.getRssMemorySize(), 0L);
   }
 
+  /**
+   * With docker /proc/&lt;pid&gt;/cgroup points at the cgroup the docker daemon
+   * created below the YARN container one. The statistics have to be read at
+   * the container_x level, which is the hierarchical parent of it.
+   */
+  @Test
+  public void readFilesWithDocker() throws IOException {
+    Files.createDirectories(root.resolve("proc/42"));
+    Files.createDirectories(root.resolve("mount/cgroup2/yarn/container_1"));
+
+    writeToFile("proc/42/cgroup",
+        "0::/container_1"
+            + "/de5b77f2cdf6b5e87de9c23da5bc07de0d69f010af503dcd15832a3389c31565");
+    writeToFile("mount/cgroup2/yarn/container_1/memory.stat",
+        "anon 22000",
+        "file_mapped 3000",
+        "kernel 5000");
+
+    CGroupsV2ResourceCalculator calculator = createCalculator();
+    when(calculator.getcGroupsHandler().getCGroupV2MountPath())
+        .thenReturn(root.resolve("mount/cgroup2/yarn").toString());
+
+    calculator.updateProcessTree();
+
+    assertEquals(30000L, calculator.getRssMemorySize(), 0L);
+  }
+
+  /**
+   * Pid 1 is the availability probe of ContainersMonitorImpl, not a
+   * container: the yarn hierarchy root is read instead.
+   */
+  @Test
+  public void readFilesOfYarnHierarchyRoot() throws IOException {
+    Files.createDirectories(root.resolve("proc/1"));
+    Files.createDirectories(root.resolve("mount/cgroup2/hadoop-yarn"));
+
+    writeToFile("proc/1/cgroup",
+        "0::/init.scope");
+    writeToFile("mount/cgroup2/hadoop-yarn/memory.stat",
+        "anon 22000",
+        "file_mapped 3000",
+        "kernel 5000");
+
+    CGroupsV2ResourceCalculator calculator = createCalculator("1");
+    when(calculator.getcGroupsHandler().getCGroupV2MountPath())
+        .thenReturn(root.resolve("mount/cgroup2").toString());
+    when(calculator.getcGroupsHandler().getRelativePathForCGroup(eq("")))
+        .thenReturn("hadoop-yarn/");
+
+    calculator.updateProcessTree();
+
+    assertEquals(30000L, calculator.getRssMemorySize(), 0L);
+  }
+
   private CGroupsV2ResourceCalculator createCalculator() {
-    CGroupsV2ResourceCalculator calculator = new CGroupsV2ResourceCalculator("42");
+    return createCalculator("42");
+  }
+
+  private CGroupsV2ResourceCalculator createCalculator(String pid) {
+    CGroupsV2ResourceCalculator calculator = new CGroupsV2ResourceCalculator(pid);
     calculator.setCpuTimeTracker(mock(CpuTimeTracker.class));
     calculator.setcGroupsHandler(mock(CGroupsHandler.class));
     calculator.setProcFs(root.toString() + "/proc/");
