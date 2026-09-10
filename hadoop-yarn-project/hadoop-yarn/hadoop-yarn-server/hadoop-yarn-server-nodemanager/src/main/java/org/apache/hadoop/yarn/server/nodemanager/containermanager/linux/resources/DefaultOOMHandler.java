@@ -31,9 +31,14 @@ import org.apache.hadoop.yarn.server.nodemanager.containermanager.container.Cont
 import org.apache.hadoop.yarn.server.nodemanager.executor.ContainerSignalContext;
 
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collections;
 
+import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_KILL_FILE;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_PROCS_FILE;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_PARAM_MEMORY_MEMSW_USAGE_BYTES;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_PARAM_MEMORY_OOM_CONTROL;
@@ -48,9 +53,32 @@ import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.r
 public class DefaultOOMHandler implements Runnable {
   protected static final Logger LOG = LoggerFactory
       .getLogger(DefaultOOMHandler.class);
+
+  /**
+   * How long to wait for cgroup.kill to empty a container cgroup before
+   * carrying on. The kernel delivers the signals synchronously, so this only
+   * covers the reaping of the processes.
+   */
+  private static final int CGROUP_KILL_WAIT_ATTEMPTS = 100;
+  private static final int CGROUP_KILL_WAIT_INTERVAL_MS = 10;
+
+  /**
+   * The out-of-memory condition the handler acts on. It differs between
+   * cgroup v1 and v2, so it belongs to the elastic memory controller, which
+   * knows the version, and not to the handler.
+   */
+  @FunctionalInterface
+  interface UnderOOMCheck {
+    boolean isUnderOOM() throws ResourceHandlerException;
+  }
+
   private final Context context;
+  private final boolean cgroupsV2;
+  private final boolean enforceVirtualMemory;
   private final String memoryStatFile;
   private final CGroupsHandler cgroups;
+  private UnderOOMCheck underOOMCheck;
+  private long postKillDelayMs;
 
   /**
    * Create an OOM handler.
@@ -61,10 +89,13 @@ public class DefaultOOMHandler implements Runnable {
    */
   public DefaultOOMHandler(Context context, boolean enforceVirtualMemory) {
     this.context = context;
+    this.enforceVirtualMemory = enforceVirtualMemory;
     this.memoryStatFile = enforceVirtualMemory ?
         CGROUP_PARAM_MEMORY_MEMSW_USAGE_BYTES :
         CGROUP_PARAM_MEMORY_USAGE_BYTES;
     this.cgroups = getCGroupsHandler();
+    this.cgroupsV2 = cgroups != null && cgroups.isCGroupsV2();
+    this.underOOMCheck = this::isRootCGroupUnderOOMV1;
   }
 
   @VisibleForTesting
@@ -73,16 +104,55 @@ public class DefaultOOMHandler implements Runnable {
   }
 
   /**
+   * Set the out-of-memory condition to act on. Called by the elastic memory
+   * controller right after it constructed the handler.
+   * @param check the condition of the root YARN cgroup
+   */
+  void setUnderOOMCheck(UnderOOMCheck check) {
+    this.underOOMCheck = check;
+  }
+
+  /**
+   * Set how long to pause after a kill before deciding to kill again, so that
+   * the kernel has time to reclaim the pages of the container we just killed.
+   * @param delayMs the pause in milliseconds, 0 for none
+   */
+  void setPostKillDelayMs(long delayMs) {
+    this.postKillDelayMs = delayMs;
+  }
+
+  private boolean isRootCGroupUnderOOMV1() throws ResourceHandlerException {
+    String status = cgroups.getCGroupParam(
+        CGroupsHandler.CGroupController.MEMORY,
+        "",
+        CGROUP_PARAM_MEMORY_OOM_CONTROL);
+    return status.contains(CGroupsHandler.UNDER_OOM);
+  }
+
+  /**
+   * The memory a container really needs, page cache excluded. With cgroup v1
+   * the kernel only reports the OOM once reclaim failed, so usage_in_bytes
+   * has the reclaimable cache dropped already; with v2 the cache has to be
+   * excluded explicitly. See {@link CGroupsV2MemoryStat}.
+   */
+  private long getMemoryUsage(String cGroupId)
+      throws ResourceHandlerException {
+    if (cgroupsV2) {
+      return CGroupsV2MemoryStat.readFootprint(
+          cgroups, cGroupId, enforceVirtualMemory);
+    }
+    return Long.parseLong(cgroups.getCGroupParam(
+        CGroupsHandler.CGroupController.MEMORY, cGroupId, memoryStatFile));
+  }
+
+  /**
    * Check if a given container exceeds its limits.
    */
   private boolean isContainerOutOfLimit(Container container) {
     boolean outOfLimit = false;
 
-    String value = null;
     try {
-      value = cgroups.getCGroupParam(CGroupsHandler.CGroupController.MEMORY,
-          container.getContainerId().toString(), memoryStatFile);
-      long usage = Long.parseLong(value);
+      long usage = getMemoryUsage(container.getContainerId().toString());
       long request = container.getResource().getMemorySize() * 1024 * 1024;
 
       // Check if the container has exceeded its limits.
@@ -98,7 +168,7 @@ public class DefaultOOMHandler implements Runnable {
       LOG.warn(String.format("Could not access memory resource for %s",
           container.getContainerId()), ex);
     } catch (NumberFormatException ex) {
-      LOG.warn(String.format("Could not parse %s in %s", value,
+      LOG.warn(String.format("Could not parse the memory usage of %s",
           container.getContainerId()));
     }
     return outOfLimit;
@@ -109,6 +179,69 @@ public class DefaultOOMHandler implements Runnable {
    * container logic. The reason is that the processes are frozen by
    * the cgroups OOM handler, so they cannot respond to SIGTERM.
    * On the other hand we have to be as fast as possible.
+   *
+   * With cgroup v2 this is one write to cgroup.kill. With v1, and whenever
+   * that write fails, every process of the cgroup is signalled individually.
+   *
+   * @param container Container to clean up
+   * @return true if the container is killed successfully, false otherwise
+   */
+  private boolean sigKill(Container container) {
+    if (cgroupsV2) {
+      try {
+        cgroupKill(container);
+        return true;
+      } catch (ResourceHandlerException | IOException ex) {
+        LOG.warn(String.format("Could not kill container %s through"
+                + " cgroup.kill, falling back to signalling every pid.",
+            container.getContainerId()), ex);
+      }
+    }
+    return sigKillEveryPid(container);
+  }
+
+  /**
+   * Kill every process of the container with a single write. cgroup.kill kills
+   * the whole subtree, so a docker child cgroup goes with it, and unlike the
+   * kernel OOM killer it does not increment memory.events' oom_kill, which is
+   * what keeps that counter a discriminator of the kernel's own kills.
+   *
+   * @param container Container to clean up
+   * @throws ResourceHandlerException cgroup.procs could not be read
+   * @throws IOException cgroup.kill could not be written, which is also the
+   *                     case on kernels older than 5.14, where it is absent
+   */
+  private void cgroupKill(Container container)
+      throws ResourceHandlerException, IOException {
+    String containerId = container.getContainerId().toString();
+    // cgroup.kill has no controller prefix, so it cannot go through
+    // updateCGroupParam.
+    Path killFile = Paths.get(
+        cgroups.getPathForCGroup(
+            CGroupsHandler.CGroupController.MEMORY, containerId),
+        CGROUP_KILL_FILE);
+    Files.write(killFile, "1".getBytes(StandardCharsets.UTF_8));
+    LOG.debug("Terminating container {} by writing to {}",
+        containerId, killFile);
+    for (int attempt = 0; attempt < CGROUP_KILL_WAIT_ATTEMPTS; ++attempt) {
+      if (cgroups.getCGroupParam(CGroupsHandler.CGroupController.MEMORY,
+          containerId, CGROUP_PROCS_FILE).isEmpty()) {
+        return;
+      }
+      try {
+        Thread.sleep(CGROUP_KILL_WAIT_INTERVAL_MS);
+      } catch (InterruptedException e) {
+        LOG.debug("Interrupted while waiting for processes to disappear");
+        return;
+      }
+    }
+    // The signals are delivered, only the reaping is late. Nothing is left to
+    // do here but say so: the memory is on its way back either way.
+    LOG.warn("Container {} still has processes {} ms after cgroup.kill",
+        containerId, CGROUP_KILL_WAIT_ATTEMPTS * CGROUP_KILL_WAIT_INTERVAL_MS);
+  }
+
+  /**
    * We walk through the list of active processes in the container.
    * This is needed because frozen parents cannot signal their children.
    * We kill each process and then try again until the whole cgroup
@@ -118,7 +251,7 @@ public class DefaultOOMHandler implements Runnable {
    * @param container Container to clean up
    * @return true if the container is killed successfully, false otherwise
    */
-  private boolean sigKill(Container container) {
+  private boolean sigKillEveryPid(Container container) {
     boolean containerKilled = false;
     boolean finished = false;
     try {
@@ -182,17 +315,9 @@ public class DefaultOOMHandler implements Runnable {
   @Override
   public void run() {
     try {
-      // We kill containers until the kernel reports the OOM situation resolved
+      // We kill containers until the out of memory condition is resolved
       // Note: If the kernel has a delay this may kill more than necessary
-      while (true) {
-        String status = cgroups.getCGroupParam(
-            CGroupsHandler.CGroupController.MEMORY,
-            "",
-            CGROUP_PARAM_MEMORY_OOM_CONTROL);
-        if (!status.contains(CGroupsHandler.UNDER_OOM)) {
-          break;
-        }
-
+      while (underOOMCheck.isUnderOOM()) {
         boolean containerKilled = killContainer();
 
         if (!containerKilled) {
@@ -203,6 +328,16 @@ public class DefaultOOMHandler implements Runnable {
               "Could not find any containers but CGroups " +
                   "reserved for containers ran out of memory. " +
                   "I am giving up");
+        }
+
+        // Give the kernel time to reclaim the pages of the container we just
+        // killed before we decide that another one has to go too.
+        if (postKillDelayMs > 0) {
+          try {
+            Thread.sleep(postKillDelayMs);
+          } catch (InterruptedException ex) {
+            LOG.debug("Interrupted while waiting after a kill");
+          }
         }
       }
     } catch (ResourceHandlerException ex) {

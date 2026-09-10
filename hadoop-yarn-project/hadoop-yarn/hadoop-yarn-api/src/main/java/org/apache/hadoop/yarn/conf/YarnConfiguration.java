@@ -1777,6 +1777,37 @@ public class YarnConfiguration extends Configuration {
   public static final Integer
       DEFAULT_NM_ELASTIC_MEMORY_CONTROL_OOM_TIMEOUT_SEC = 5;
 
+  /**
+   * Distance in MiB between memory.high, where cgroup v2 starts throttling
+   * and reclaiming, and memory.max, the hard limit of the root YARN cgroup.
+   * A negative value means 5% of the limit, with a floor of 512 MiB.
+   */
+  public static final String
+      NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_HIGH_MARGIN_MB =
+      NM_PREFIX + "elastic-memory-control.cgroups.v2.high-margin-mb";
+  public static final int
+      DEFAULT_NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_HIGH_MARGIN_MB = -1;
+
+  /**
+   * How long the cgroup v2 out of memory condition has to hold continuously
+   * before a container is killed. The timer resets if the condition clears.
+   */
+  public static final String
+      NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_OOM_HOLD_DURATION_MS =
+      NM_PREFIX + "elastic-memory-control.cgroups.v2.oom-hold-duration-ms";
+  public static final long
+      DEFAULT_NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_OOM_HOLD_DURATION_MS = 2000;
+
+  /**
+   * Pause after killing a container before re-evaluating the cgroup v2 out of
+   * memory condition, to let the kernel reclaim the container's pages.
+   */
+  public static final String
+      NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_POST_KILL_DELAY_MS =
+      NM_PREFIX + "elastic-memory-control.cgroups.v2.post-kill-delay-ms";
+  public static final long
+      DEFAULT_NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_POST_KILL_DELAY_MS = 500;
+
   /** Number of Virtual CPU Cores which can be allocated for containers.*/
   public static final String NM_VCORES = NM_PREFIX + "resource.cpu-vcores";
   public static final int DEFAULT_NM_VCORES = 8;

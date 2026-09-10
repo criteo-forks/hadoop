@@ -17,6 +17,7 @@
  */
 package org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources;
 
+import org.apache.commons.io.FileUtils;
 import org.apache.hadoop.yarn.api.records.ApplicationAttemptId;
 import org.apache.hadoop.yarn.api.records.ApplicationId;
 import org.apache.hadoop.yarn.api.records.ContainerId;
@@ -28,15 +29,25 @@ import org.apache.hadoop.yarn.server.nodemanager.ContainerExecutor;
 import org.apache.hadoop.yarn.server.nodemanager.Context;
 import org.apache.hadoop.yarn.server.nodemanager.containermanager.container.Container;
 import org.apache.hadoop.yarn.server.nodemanager.executor.ContainerSignalContext;
+import org.junit.Rule;
 import org.junit.Test;
+import org.junit.rules.TemporaryFolder;
 
+import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
+import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_KILL_FILE;
+import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_STAT;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_PROCS_FILE;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_PARAM_MEMORY_MEMSW_USAGE_BYTES;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_PARAM_MEMORY_OOM_CONTROL;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_PARAM_MEMORY_USAGE_BYTES;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
+import static org.junit.Assert.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.times;
@@ -47,6 +58,9 @@ import static org.mockito.Mockito.when;
  * Test default out of memory handler.
  */
 public class TestDefaultOOMHandler {
+
+  @Rule
+  public TemporaryFolder tmp = new TemporaryFolder();
 
   /**
    * Test an OOM situation where there are no containers that can be killed.
@@ -1225,6 +1239,246 @@ public class TestDefaultOOMHandler {
     handler.run();
   }
 
+  /**
+   * With cgroup v2 the page cache is not dropped before the node manager is
+   * notified, so the measure that decides whether a container is over its
+   * request has to be the RSS keys of memory.stat rather than the total
+   * usage. Here only the second container is over, and the victim policy
+   * orders it before the one that was launched later.
+   */
+  @Test
+  public void testV2ContainerOutOfLimitFromMemoryStat() throws Exception {
+    ConcurrentHashMap<ContainerId, Container> containers =
+        new ConcurrentHashMap<>();
+    Container c1 = createContainer(1, true, 2L, true);
+    containers.put(c1.getContainerId(), c1);
+    Container c2 = createContainer(2, true, 1L, true);
+    containers.put(c2.getContainerId(), c2);
+
+    ContainerExecutor ex = createContainerExecutor(containers);
+    Context context = mock(Context.class);
+    when(context.getContainers()).thenReturn(containers);
+    when(context.getContainerExecutor()).thenReturn(ex);
+
+    CGroupsHandler cGroupsHandler = mockV2CGroupsHandler();
+    // 4 + 4 + 1 MB against the 10 MB request of createContainer
+    File cGroup1 = stubV2Container(cGroupsHandler, c1, memoryStat(4, 4, 1));
+    // 6 + 4 + 1 MB against the same request
+    File cGroup2 = stubV2Container(cGroupsHandler, c2, memoryStat(6, 4, 1));
+
+    v2Handler(context, cGroupsHandler, 1).run();
+
+    assertTrue("The container over its request had to be the victim",
+        new File(cGroup2, CGROUP_KILL_FILE).exists());
+    assertFalse("The container within its request had to be spared",
+        new File(cGroup1, CGROUP_KILL_FILE).exists());
+  }
+
+  /**
+   * A memory.stat without the kernel key, as read on kernels older than
+   * 5.18, degrades to anon + file_mapped instead of failing the check.
+   */
+  @Test
+  public void testV2ContainerOutOfLimitWithoutTheKernelKey() throws Exception {
+    ConcurrentHashMap<ContainerId, Container> containers =
+        new ConcurrentHashMap<>();
+    Container c1 = createContainer(1, true, 2L, true);
+    containers.put(c1.getContainerId(), c1);
+    Container c2 = createContainer(2, true, 1L, true);
+    containers.put(c2.getContainerId(), c2);
+
+    ContainerExecutor ex = createContainerExecutor(containers);
+    Context context = mock(Context.class);
+    when(context.getContainers()).thenReturn(containers);
+    when(context.getContainerExecutor()).thenReturn(ex);
+
+    CGroupsHandler cGroupsHandler = mockV2CGroupsHandler();
+    File cGroup1 = stubV2Container(cGroupsHandler, c1,
+        "anon " + mb(4) + "\nfile_mapped " + mb(4) + "\nslab 4711\n");
+    File cGroup2 = stubV2Container(cGroupsHandler, c2,
+        "anon " + mb(8) + "\nfile_mapped " + mb(4) + "\nslab 4711\n");
+
+    v2Handler(context, cGroupsHandler, 1).run();
+
+    assertTrue("anon + file_mapped alone has to decide",
+        new File(cGroup2, CGROUP_KILL_FILE).exists());
+    assertFalse(new File(cGroup1, CGROUP_KILL_FILE).exists());
+  }
+
+  /**
+   * With cgroup v2 a container is killed in a single write to cgroup.kill,
+   * which takes its docker child cgroup down with it and, unlike the kernel
+   * OOM killer, does not increment memory.events' oom_kill.
+   */
+  @Test
+  public void testV2KillsThroughCGroupKill() throws Exception {
+    ConcurrentHashMap<ContainerId, Container> containers =
+        new ConcurrentHashMap<>();
+    Container c1 = createContainer(1, true, 1L, true);
+    containers.put(c1.getContainerId(), c1);
+
+    ContainerExecutor ex = createContainerExecutor(containers);
+    Context context = mock(Context.class);
+    when(context.getContainers()).thenReturn(containers);
+    when(context.getContainerExecutor()).thenReturn(ex);
+
+    CGroupsHandler cGroupsHandler = mockV2CGroupsHandler();
+    File cGroup = stubV2Container(cGroupsHandler, c1, memoryStat(1, 0, 0));
+
+    v2Handler(context, cGroupsHandler, 1).run();
+
+    assertEquals("The kill has to go through cgroup.kill", "1",
+        FileUtils.readFileToString(new File(cGroup, CGROUP_KILL_FILE),
+            StandardCharsets.UTF_8));
+    verify(ex, times(0)).signalContainer(any());
+  }
+
+  /**
+   * cgroup.kill does not exist before Linux 5.14, and the write can fail for
+   * other reasons too. The per pid SIGKILL loop stays as the fallback.
+   */
+  @Test
+  public void testV2FallsBackToSignallingEveryPid() throws Exception {
+    ConcurrentHashMap<ContainerId, Container> containers =
+        new ConcurrentHashMap<>();
+    Container c1 = createContainer(1, true, 1L, true);
+    containers.put(c1.getContainerId(), c1);
+
+    ContainerExecutor ex = createContainerExecutor(containers);
+    Context context = mock(Context.class);
+    when(context.getContainers()).thenReturn(containers);
+    when(context.getContainerExecutor()).thenReturn(ex);
+
+    CGroupsHandler cGroupsHandler = mockV2CGroupsHandler();
+    // There is no such directory, so the write to cgroup.kill fails.
+    when(cGroupsHandler.getPathForCGroup(CGroupsHandler.CGroupController.MEMORY,
+        c1.getContainerId().toString()))
+        .thenReturn(new File(tmp.getRoot(), "gone").getAbsolutePath());
+    when(cGroupsHandler.getCGroupParam(CGroupsHandler.CGroupController.MEMORY,
+        c1.getContainerId().toString(), CGROUP_PROCS_FILE))
+        .thenReturn("1234").thenReturn("");
+    when(cGroupsHandler.getCGroupParam(CGroupsHandler.CGroupController.MEMORY,
+        c1.getContainerId().toString(), CGROUP_MEMORY_STAT))
+        .thenReturn(memoryStat(1, 0, 0));
+
+    v2Handler(context, cGroupsHandler, 1).run();
+
+    verify(ex, times(1)).signalContainer(
+        new ContainerSignalContext.Builder()
+            .setPid("1234")
+            .setContainer(c1)
+            .setSignal(ContainerExecutor.Signal.KILL)
+            .build()
+    );
+  }
+
+  /**
+   * After a kill the handler pauses, so that the kernel has a chance to
+   * reclaim the pages of the container that just died, and it re-reads the
+   * condition before it decides that another one has to go too.
+   */
+  @Test
+  public void testV2PostKillDelayAndRecheck() throws Exception {
+    ConcurrentHashMap<ContainerId, Container> containers =
+        new ConcurrentHashMap<>();
+    Container c1 = createContainer(1, false, 1L, true);
+    containers.put(c1.getContainerId(), c1);
+    Container c2 = createContainer(2, false, 2L, true);
+    containers.put(c2.getContainerId(), c2);
+
+    ContainerExecutor ex = createContainerExecutor(containers);
+    Context context = mock(Context.class);
+    when(context.getContainers()).thenReturn(containers);
+    when(context.getContainerExecutor()).thenReturn(ex);
+
+    CGroupsHandler cGroupsHandler = mockV2CGroupsHandler();
+    // The pid loop is used here, because it is what removes the container
+    // from the node manager context and so lets a second one be picked.
+    for (Container container : new Container[] {c1, c2}) {
+      String id = container.getContainerId().toString();
+      when(cGroupsHandler.getPathForCGroup(
+          CGroupsHandler.CGroupController.MEMORY, id))
+          .thenReturn(new File(tmp.getRoot(), "gone-" + id).getAbsolutePath());
+      when(cGroupsHandler.getCGroupParam(
+          CGroupsHandler.CGroupController.MEMORY, id, CGROUP_PROCS_FILE))
+          .thenReturn("123" + id).thenReturn("");
+      when(cGroupsHandler.getCGroupParam(
+          CGroupsHandler.CGroupController.MEMORY, id, CGROUP_MEMORY_STAT))
+          .thenReturn(memoryStat(1, 0, 0));
+    }
+
+    // Still out of memory after the first kill, resolved after the second.
+    DefaultOOMHandler handler = v2Handler(context, cGroupsHandler, 2);
+    long postKillDelayMs = 200;
+    handler.setPostKillDelayMs(postKillDelayMs);
+
+    long start = System.currentTimeMillis();
+    handler.run();
+    long elapsed = System.currentTimeMillis() - start;
+
+    verify(ex, times(2)).signalContainer(any());
+    assertTrue("The handler has to pause after each kill, it took only "
+        + elapsed + " ms", elapsed >= 2 * postKillDelayMs);
+  }
+
+  private CGroupsHandler mockV2CGroupsHandler() {
+    CGroupsHandler cGroupsHandler = mock(CGroupsHandler.class);
+    when(cGroupsHandler.isCGroupsV2()).thenReturn(true);
+    return cGroupsHandler;
+  }
+
+  /**
+   * Give a container a cgroup directory cgroup.kill can be written to, an
+   * empty cgroup.procs so that the kill is seen to complete, and the given
+   * memory.stat.
+   *
+   * @return the cgroup directory of the container
+   */
+  private File stubV2Container(CGroupsHandler cGroupsHandler,
+      Container container, String memoryStat) throws Exception {
+    String id = container.getContainerId().toString();
+    File cGroup = tmp.newFolder(id);
+    when(cGroupsHandler.getPathForCGroup(
+        CGroupsHandler.CGroupController.MEMORY, id))
+        .thenReturn(cGroup.getAbsolutePath());
+    when(cGroupsHandler.getCGroupParam(
+        CGroupsHandler.CGroupController.MEMORY, id, CGROUP_PROCS_FILE))
+        .thenReturn("");
+    when(cGroupsHandler.getCGroupParam(
+        CGroupsHandler.CGroupController.MEMORY, id, CGROUP_MEMORY_STAT))
+        .thenReturn(memoryStat);
+    return cGroup;
+  }
+
+  /**
+   * A handler as the cgroup v2 elastic memory controller sets it up: the out
+   * of memory condition comes from the controller, and it holds for the given
+   * number of checks.
+   */
+  private DefaultOOMHandler v2Handler(Context context,
+      CGroupsHandler cGroupsHandler, int underOOMChecks) {
+    DefaultOOMHandler handler = new DefaultOOMHandler(context, false) {
+      @Override
+      protected CGroupsHandler getCGroupsHandler() {
+        return cGroupsHandler;
+      }
+    };
+    AtomicInteger remaining = new AtomicInteger(underOOMChecks);
+    handler.setUnderOOMCheck(() -> remaining.getAndDecrement() > 0);
+    return handler;
+  }
+
+  private static String memoryStat(long anonMb, long fileMappedMb,
+      long kernelMb) {
+    return "anon " + mb(anonMb)
+        + "\nfile_mapped " + mb(fileMappedMb)
+        + "\nkernel " + mb(kernelMb)
+        + "\nslab 4711\n";
+  }
+
+  private static long mb(long megaBytes) {
+    return megaBytes * 1024 * 1024;
+  }
   private static ContainerId createContainerId(int id) {
     ApplicationId applicationId = ApplicationId.newInstance(1, 1);
 

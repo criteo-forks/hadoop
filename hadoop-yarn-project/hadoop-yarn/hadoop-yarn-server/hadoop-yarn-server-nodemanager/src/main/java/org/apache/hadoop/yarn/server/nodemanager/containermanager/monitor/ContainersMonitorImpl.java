@@ -220,7 +220,7 @@ public class ContainersMonitorImpl extends AbstractService implements
             "CGroup Elastic Memory controller enabled but " +
             "it is not available. Exiting.");
       } else {
-        this.oomListenerThread = new CGroupElasticMemoryController(
+        this.oomListenerThread = CGroupElasticMemoryController.create(
             conf,
             context,
             ResourceHandlerModule.getCGroupsHandler(),

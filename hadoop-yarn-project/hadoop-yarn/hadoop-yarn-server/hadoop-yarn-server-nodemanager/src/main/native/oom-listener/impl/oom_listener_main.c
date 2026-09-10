@@ -26,13 +26,16 @@
 #include "oom_listener.h"
 
 extern inline void cleanup(_oom_listener_descriptors *descriptors);
+extern inline void cleanup_v2(_oom_listener_v2_descriptors *descriptors);
 
 void print_usage(void) {
   fprintf(stderr, "oom-listener");
   fprintf(stderr, "Listen to OOM events in a cgroup");
-  fprintf(stderr, "usage to listen: oom-listener <cgroup directory>\n");
+  fprintf(stderr, "usage to listen: oom-listener [<cgroup version>] <cgroup directory>\n");
   fprintf(stderr, "usage to test: oom-listener oom [<pgid>]\n");
-  fprintf(stderr, "example listening: oom-listener /sys/fs/cgroup/memory/hadoop-yarn | xxd -c 8\n");
+  fprintf(stderr, "The cgroup version is 1 or 2, and defaults to 1.\n");
+  fprintf(stderr, "example listening: oom-listener 1 /sys/fs/cgroup/memory/hadoop-yarn | xxd -c 8\n");
+  fprintf(stderr, "example listening v2: oom-listener 2 /sys/fs/cgroup/hadoop-yarn | xxd -c 8\n");
   fprintf(stderr, "example oom to test: bash -c 'echo $$ >/sys/fs/cgroup/memory/hadoop-yarn/tasks;oom-listener oom'\n");
   fprintf(stderr, "example container overload: sudo -u <user> bash -c 'echo $$ && oom-listener oom 0' >/sys/fs/cgroup/memory/hadoop-yarn/<container>/tasks\n");
   exit(EXIT_FAILURE);
@@ -64,15 +67,49 @@ void test_oom_infinite(char* pgids) {
  It will print a new line on every out of memory event
  to the standard output.
  usage:
- oom-listener <cgroup>
+ oom-listener [<cgroup version>] <cgroup>
+ The version is 1 or 2. It defaults to 1, so that the two argument form an
+ older node manager passes keeps working.
 */
 int main(int argc, char *argv[]) {
+  const char *cgroup;
+  long version = 1;
+  int ret;
+
   if (argc >= 2 &&
       strcmp(argv[1], "oom") == 0)
     test_oom_infinite(argc < 3 ? NULL : argv[2]);
 
-  if (argc != 2)
+  if (argc == 2) {
+    cgroup = argv[1];
+  } else if (argc == 3) {
+    version = strtol(argv[1], NULL, 10);
+    cgroup = argv[2];
+    if (version != 1 && version != 2)
+      print_usage();
+  } else {
     print_usage();
+    return EXIT_FAILURE;
+  }
+
+  if (version == 2) {
+    _oom_listener_v2_descriptors v2_descriptors = {
+        .command = argv[0],
+        .events_fd = -1,
+        .events_path = {0},
+        .last_high = 0,
+        .last_max = 0,
+        .last_oom = 0,
+        .last_oom_kill = 0,
+        .watch_timeout = 1000
+    };
+
+    ret = oom_listener_v2(&v2_descriptors, cgroup, STDOUT_FILENO);
+
+    cleanup_v2(&v2_descriptors);
+
+    return ret;
+  }
 
   _oom_listener_descriptors descriptors = {
       .command = argv[0],
@@ -86,7 +123,7 @@ int main(int argc, char *argv[]) {
       .watch_timeout = 1000
   };
 
-  int ret = oom_listener(&descriptors, argv[1], STDOUT_FILENO);
+  ret = oom_listener(&descriptors, cgroup, STDOUT_FILENO);
 
   cleanup(&descriptors);
 

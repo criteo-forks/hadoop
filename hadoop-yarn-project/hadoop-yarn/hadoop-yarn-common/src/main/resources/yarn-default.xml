@@ -4975,6 +4975,42 @@
     <name>yarn.nodemanager.elastic-memory-control.timeout-sec</name>
     <value>5</value>
   </property>
+
+  <property>
+    <description>
+      The distance between memory.high, where the kernel starts throttling
+      and reclaiming, and memory.max, the hard limit, on the root YARN cgroup
+      with cgroup v2. The node manager gets its warning at memory.high and
+      kills a container of its choosing before memory.max is reached, since
+      cgroup v2 has no way of making a cgroup stop at its limit instead of
+      being killed. A negative value means 5% of the limit, with a floor of
+      512 MiB. Only used with cgroup v2.
+    </description>
+    <name>yarn.nodemanager.elastic-memory-control.cgroups.v2.high-margin-mb</name>
+    <value>-1</value>
+  </property>
+
+  <property>
+    <description>
+      How long the out-of-memory condition must hold continuously before a
+      container is killed. The timer resets if the condition clears, so a
+      condition that flaps never kills anything. This is a calibration
+      starting point rather than a tuned value. Only used with cgroup v2.
+    </description>
+    <name>yarn.nodemanager.elastic-memory-control.cgroups.v2.oom-hold-duration-ms</name>
+    <value>2000</value>
+  </property>
+
+  <property>
+    <description>
+      Pause after killing a container before re-evaluating whether another one
+      has to go too, to let the kernel reclaim the pages of the container that
+      was just killed. Only used with cgroup v2.
+    </description>
+    <name>yarn.nodemanager.elastic-memory-control.cgroups.v2.post-kill-delay-ms</name>
+    <value>500</value>
+  </property>
+
   <property>
     <description>
       URI for NodeAttributeManager. The default value is

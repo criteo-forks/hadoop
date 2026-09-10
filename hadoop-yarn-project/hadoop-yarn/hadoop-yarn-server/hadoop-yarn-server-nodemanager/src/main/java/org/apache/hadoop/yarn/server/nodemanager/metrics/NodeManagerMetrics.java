@@ -105,6 +105,9 @@ public class NodeManagerMetrics {
   @Metric("Orphaned application directories whose ownership could not be"
       + " restored, so they could not be deleted")
   MutableCounterLong orphanedAppDirsReownFailures;
+  @Metric("# of times the kernel OOM killer acted inside the YARN cgroup"
+      + " before the NodeManager could choose a victim")
+  MutableCounterLong kernelOomKills;
 
   @Metric("Missed localization requests in bytes")
       MutableCounterLong localizedCacheMissBytes;
@@ -169,6 +172,20 @@ public class NodeManagerMetrics {
 
   public void killedContainer() {
     containersKilled.incr();
+  }
+
+  /**
+   * The kernel OOM killer killed processes inside the YARN cgroup before the
+   * elastic memory controller could choose a victim itself. A sustained
+   * increase means the throttling band below the limit is too narrow to react
+   * in, or that the node manager is not reacting fast enough, and the
+   * containers it takes down are picked by the kernel rather than by the
+   * victim policy.
+   *
+   * @param kills how many kills the kernel reported since the last count
+   */
+  public void kernelOomKills(long kills) {
+    kernelOomKills.incr(kills);
   }
 
   public void initingContainer() {
@@ -338,6 +355,11 @@ public class NodeManagerMetrics {
   @VisibleForTesting
   public int getKilledContainers() {
     return containersKilled.value();
+  }
+
+  @VisibleForTesting
+  public long getKernelOomKills() {
+    return kernelOomKills.value();
   }
 
   @VisibleForTesting

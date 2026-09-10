@@ -22,6 +22,7 @@
 #include <errno.h>
 #include <string.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <unistd.h>
@@ -98,5 +99,63 @@ inline void cleanup(_oom_listener_descriptors *descriptors) {
  * fd: File to forward events to. Normally this is stdout
  */
 int oom_listener(_oom_listener_descriptors *descriptors, const char *cgroup, int fd);
+
+/*
+ * Size of the buffer memory.events is read into. The file holds a handful of
+ * "<key> <count>" lines, so this is generous.
+ */
+#define OOM_LISTENER_EVENTS_BUFFER 4096
+
+/*
+ * State of the cgroup v2 listener. cgroup v2 has no cgroup.event_control and
+ * no eventfd: memory.events is polled for POLLPRI directly and its counters
+ * are compared against the previous reading.
+ */
+typedef struct _oom_listener_v2_descriptors {
+  /*
+   * Command line that was called to run this process.
+   */
+  const char *command;
+  /*
+   * memory.events file handle
+   */
+  int events_fd;
+  /*
+   * memory.events path
+   */
+  char events_path[PATH_MAX];
+  /*
+   * The previous reading of the memory.events counters. high and max drive
+   * the events we forward, oom and oom_kill are only reported on stderr.
+   */
+  uint64_t last_high;
+  uint64_t last_max;
+  uint64_t last_oom;
+  uint64_t last_oom_kill;
+  /*
+   * Directory watch timeout
+   */
+  int watch_timeout;
+} _oom_listener_v2_descriptors;
+
+/*
+ Clean up allocated resources in a v2 descriptor structure
+*/
+inline void cleanup_v2(_oom_listener_v2_descriptors *descriptors) {
+  if (descriptors->events_fd != -1) {
+    close(descriptors->events_fd);
+    descriptors->events_fd = -1;
+  }
+  descriptors->watch_timeout = 1000;
+}
+
+/*
+ * Enable an OOM listener on a cgroup v2 memory cgroup
+ * descriptors: Structure that holds state for testing purposes
+ * cgroup: cgroup path to watch. It has to be a cgroup v2 cgroup
+ * fd: File to forward events to. Normally this is stdout
+ */
+int oom_listener_v2(_oom_listener_v2_descriptors *descriptors,
+                    const char *cgroup, int fd);
 
 #endif

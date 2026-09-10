@@ -23,10 +23,10 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.regex.Matcher;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.slf4j.Logger;
@@ -102,20 +102,15 @@ public class CGroupsV2ResourceCalculator extends AbstractCGroupsResourceCalculat
   private static final String MEM_STAT = "memory.stat";
 
   /**
-   * The cgroup v1 names of these counters are rss, mapped_file and
-   * memory.kmem.usage_in_bytes: the memory a container really needs under
-   * pressure, page cache excluded. See the "A proper memory measure for
-   * cgroup based memory management on Yarn" design note and
-   * {@link CGroupsResourceCalculator}. In v2 memory.stat is hierarchical by
-   * default, so there is no total_ prefixed variant to pick.
-   * On kernels older than 5.18 the kernel key is absent and the sum
-   * degrades to anon + file_mapped.
+   * The memory.stat keys that add up to the RSS of a cgroup. They are defined
+   * once, in {@link CGroupsV2MemoryStat#RSS_MEMORY_KEYS}, which the elastic
+   * memory controller and the OOM handler read the same way; here they only
+   * get the file prefix this calculator keys its stats map by.
    */
-  private static final List<String> RSS_MEMORY_KEYS = Arrays.asList(
-      MEM_STAT + "#anon",
-      MEM_STAT + "#file_mapped",
-      MEM_STAT + "#kernel"
-  );
+  private static final List<String> RSS_MEMORY_KEYS =
+      CGroupsV2MemoryStat.RSS_MEMORY_KEYS.stream()
+          .map(key -> MEM_STAT + "#" + key)
+          .collect(Collectors.toList());
 
   /**
    * <a href="https://docs.kernel.org/admin-guide/cgroup-v2.html#memory-interface-files">DOC</a>

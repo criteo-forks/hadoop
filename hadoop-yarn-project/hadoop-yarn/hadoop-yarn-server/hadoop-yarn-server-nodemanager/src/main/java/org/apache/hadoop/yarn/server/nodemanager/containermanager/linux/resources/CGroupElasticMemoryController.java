@@ -18,7 +18,6 @@
 package org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources;
 
 import org.apache.hadoop.classification.VisibleForTesting;
-import org.apache.commons.io.IOUtils;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.apache.hadoop.conf.Configuration;
@@ -31,10 +30,16 @@ import org.apache.hadoop.yarn.server.nodemanager.Context;
 import org.apache.hadoop.yarn.util.Clock;
 import org.apache.hadoop.yarn.util.MonotonicClock;
 
+import java.io.BufferedReader;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.lang.reflect.Constructor;
 import java.nio.charset.StandardCharsets;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.List;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -45,30 +50,37 @@ import static org.apache.hadoop.yarn.conf.YarnConfiguration.NM_ELASTIC_MEMORY_CO
 import static org.apache.hadoop.yarn.conf.YarnConfiguration.NM_ELASTIC_MEMORY_CONTROL_OOM_TIMEOUT_SEC;
 import static org.apache.hadoop.yarn.conf.YarnConfiguration.NM_PMEM_CHECK_ENABLED;
 import static org.apache.hadoop.yarn.conf.YarnConfiguration.NM_VMEM_CHECK_ENABLED;
-import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_PARAM_MEMORY_HARD_LIMIT_BYTES;
-import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_PARAM_MEMORY_OOM_CONTROL;
-import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_PARAM_MEMORY_SWAP_HARD_LIMIT_BYTES;
-import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_NO_LIMIT;
 
 /**
  * This thread controls memory usage using cgroups. It listens to out of memory
  * events of all the containers together, and if we go over the limit picks
  * a container to kill. The algorithm that picks the container is a plugin.
+ *
+ * The cgroup interface differs enough between v1 and v2 that the root cgroup
+ * writes, the out-of-memory condition and the arguments of the native listener
+ * are left to {@link CGroupsV1ElasticMemoryController} and
+ * {@link CGroupsV2ElasticMemoryController}. Use
+ * {@link #create(Configuration, Context, CGroupsHandler, boolean, boolean,
+ * long)} to get the one that matches the handler: the same artifact runs on
+ * v1 and v2 nodes for the length of a rollout, so the version can only come
+ * from the handler.
  */
-public class CGroupElasticMemoryController extends Thread {
+public abstract class CGroupElasticMemoryController extends Thread {
   protected static final Logger LOG = LoggerFactory
       .getLogger(CGroupElasticMemoryController.class);
   private final Clock clock = new MonotonicClock();
-  private String yarnCGroupPath;
-  private String oomListenerPath;
-  private Runnable oomHandler;
-  private CGroupsHandler cgroups;
-  private boolean controlPhysicalMemory;
-  private boolean controlVirtualMemory;
-  private long limit;
+  private final String oomListenerPath;
+  private final Runnable oomHandler;
+  private final int timeoutMS;
+  protected final Configuration conf;
+  protected final Context context;
+  protected final CGroupsHandler cgroups;
+  protected final String yarnCGroupPath;
+  protected final boolean controlPhysicalMemory;
+  protected final boolean controlVirtualMemory;
+  protected final long limit;
   private Process process = null;
   private boolean stopped = false;
-  private int timeoutMS;
 
   /**
    * Default constructor.
@@ -81,8 +93,7 @@ public class CGroupElasticMemoryController extends Thread {
    * @param oomHandlerOverride optional OOM handler
    * @exception YarnException Could not instantiate class
    */
-  @VisibleForTesting
-  CGroupElasticMemoryController(Configuration conf,
+  protected CGroupElasticMemoryController(Configuration conf,
                                        Context context,
                                        CGroupsHandler cgroups,
                                        boolean controlPhysicalMemory,
@@ -117,12 +128,77 @@ public class CGroupElasticMemoryController extends Thread {
         DEFAULT_NM_ELASTIC_MEMORY_CONTROL_OOM_TIMEOUT_SEC);
     this.oomListenerPath = getOOMListenerExecutablePath(conf);
     this.oomHandler = oomHandlerTemp;
+    this.conf = conf;
+    this.context = context;
     this.cgroups = cgroups;
     this.controlPhysicalMemory = !controlVirtual;
     this.controlVirtualMemory = controlVirtual;
     this.yarnCGroupPath = this.cgroups
         .getPathForCGroup(CGroupsHandler.CGroupController.MEMORY, "");
     this.limit = limit;
+    // The out-of-memory condition is the controller's, not the handler's: the
+    // handler cannot know which cgroup version it is running on.
+    if (this.oomHandler instanceof DefaultOOMHandler) {
+      ((DefaultOOMHandler) this.oomHandler).setUnderOOMCheck(this::isUnderOOM);
+    }
+  }
+
+  /**
+   * Create the controller matching the cgroup version of the handler.
+   *
+   * @param conf Yarn configuration to use
+   * @param context Node manager context to out of memory handler
+   * @param cgroups Cgroups handler configured
+   * @param controlPhysicalMemory Whether to listen to physical memory OOM
+   * @param controlVirtualMemory Whether to listen to virtual memory OOM
+   * @param limit memory limit in bytes
+   * @return a v1 or a v2 controller
+   * @exception YarnException Could not instantiate class
+   */
+  public static CGroupElasticMemoryController create(Configuration conf,
+                                       Context context,
+                                       CGroupsHandler cgroups,
+                                       boolean controlPhysicalMemory,
+                                       boolean controlVirtualMemory,
+                                       long limit)
+      throws YarnException {
+    return create(conf, context, cgroups, controlPhysicalMemory,
+        controlVirtualMemory, limit, null);
+  }
+
+  /**
+   * Create the controller matching the cgroup version of the handler, with an
+   * out of memory handler of the caller's choosing.
+   *
+   * @param conf Yarn configuration to use
+   * @param context Node manager context to out of memory handler
+   * @param cgroups Cgroups handler configured
+   * @param controlPhysicalMemory Whether to listen to physical memory OOM
+   * @param controlVirtualMemory Whether to listen to virtual memory OOM
+   * @param limit memory limit in bytes
+   * @param oomHandlerOverride optional OOM handler
+   * @return a v1 or a v2 controller
+   * @exception YarnException Could not instantiate class
+   */
+  @VisibleForTesting
+  static CGroupElasticMemoryController create(Configuration conf,
+                                       Context context,
+                                       CGroupsHandler cgroups,
+                                       boolean controlPhysicalMemory,
+                                       boolean controlVirtualMemory,
+                                       long limit,
+                                       Runnable oomHandlerOverride)
+      throws YarnException {
+    // The handler resolves the version by detection with a v1 fallback. It is
+    // the only selector: a node manager artifact has to serve v1 and v2 nodes
+    // at the same time, so this must not become a configuration key.
+    if (cgroups != null && cgroups.isCGroupsV2()) {
+      return new CGroupsV2ElasticMemoryController(conf, context, cgroups,
+          controlPhysicalMemory, controlVirtualMemory, limit,
+          oomHandlerOverride);
+    }
+    return new CGroupsV1ElasticMemoryController(conf, context, cgroups,
+        controlPhysicalMemory, controlVirtualMemory, limit, oomHandlerOverride);
   }
 
   /**
@@ -156,29 +232,46 @@ public class CGroupElasticMemoryController extends Thread {
   }
 
   /**
-   * Default constructor.
-   * @param conf Yarn configuration to use
-   * @param context Node manager context to out of memory handler
-   * @param cgroups Cgroups handler configured
-   * @param controlPhysicalMemory Whether to listen to physical memory OOM
-   * @param controlVirtualMemory Whether to listen to virtual memory OOM
-   * @param limit memory limit in bytes
-   * @exception YarnException Could not instantiate class
+   * Update the root memory cgroup, which contains all containers, so that the
+   * kernel notifies us before it runs out of memory.
+   * @throws ResourceHandlerException a cgroup file could not be written
    */
-  public CGroupElasticMemoryController(Configuration conf,
-                                       Context context,
-                                       CGroupsHandler cgroups,
-                                       boolean controlPhysicalMemory,
-                                       boolean controlVirtualMemory,
-                                       long limit)
-      throws YarnException {
-    this(conf,
-        context,
-        cgroups,
-        controlPhysicalMemory,
-        controlVirtualMemory,
-        limit,
-        null);
+  protected abstract void setCGroupParameters()
+      throws ResourceHandlerException;
+
+  /**
+   * Reset the root memory cgroup to OS defaults. This controls all containers.
+   */
+  protected abstract void resetCGroupParameters();
+
+  /**
+   * Whether the root YARN cgroup is in the out-of-memory condition that
+   * justifies killing a container.
+   * @return true if a container has to be killed
+   * @throws ResourceHandlerException a cgroup file could not be read
+   */
+  protected abstract boolean isUnderOOM() throws ResourceHandlerException;
+
+  /**
+   * The command line arguments of the native oom-listener, after its path.
+   * @return the arguments to pass to oom-listener
+   */
+  protected abstract String[] oomListenerArgs();
+
+  /**
+   * A line the native listener wrote to its standard error. The default is to
+   * leave it to the summary logged when the listener exits.
+   * @param line one line of the listener's standard error
+   */
+  protected void onListenerError(String line) {
+  }
+
+  /**
+   * The out of memory handler, so that a subclass can configure it further.
+   * @return the handler this controller calls on an out of memory event
+   */
+  protected Runnable getOOMHandler() {
+    return oomHandler;
   }
 
   /**
@@ -249,7 +342,10 @@ public class CGroupElasticMemoryController extends Thread {
 
       // Start a listener process
       ProcessBuilder oomListener = new ProcessBuilder();
-      oomListener.command(oomListenerPath, yarnCGroupPath);
+      List<String> command = new ArrayList<>();
+      command.add(oomListenerPath);
+      command.addAll(Arrays.asList(oomListenerArgs()));
+      oomListener.command(command);
       synchronized (this) {
         if (!stopped) {
           process = oomListener.start();
@@ -269,8 +365,8 @@ public class CGroupElasticMemoryController extends Thread {
 
       // Listen to any errors in the background. We do not expect this to
       // be large in size, so it will fit into a string.
-      Future<String> errorListener =
-          executor.submit(() -> IOUtils.toString(process.getErrorStream(), StandardCharsets.UTF_8));
+      final InputStream errors = process.getErrorStream();
+      Future<String> errorListener = executor.submit(() -> readErrors(errors));
 
       // We get Linux event increments (8 bytes) forwarded from the event stream
       // The events cannot be split, so it is safe to read them as a whole
@@ -326,6 +422,32 @@ public class CGroupElasticMemoryController extends Thread {
   }
 
   /**
+   * Collect the standard error of the listener, handing each line to
+   * {@link #onListenerError(String)} as it arrives. The listener reports what
+   * the kernel did there, so it has to be read while the OOM episode is going
+   * on, not only once the process exited.
+   * @param errors the standard error of the listener process
+   * @return everything the listener wrote to its standard error
+   * @throws IOException the stream could not be read
+   */
+  private String readErrors(InputStream errors) throws IOException {
+    StringBuilder collected = new StringBuilder();
+    try (BufferedReader reader = new BufferedReader(
+        new InputStreamReader(errors, StandardCharsets.UTF_8))) {
+      String line;
+      while ((line = reader.readLine()) != null) {
+        collected.append(line).append('\n');
+        try {
+          onListenerError(line);
+        } catch (RuntimeException ex) {
+          LOG.warn("Could not handle the listener error line " + line, ex);
+        }
+      }
+    }
+    return collected.toString();
+  }
+
+  /**
    * Resolve an OOM event.
    * Listen to the handler timeouts.
    * @param executor Executor to create watchdog with.
@@ -340,7 +462,7 @@ public class CGroupElasticMemoryController extends Thread {
         executor.submit(() -> watchAndLogOOMState(start));
     // Kill something to resolve the issue
     try {
-      oomHandler.run();
+      getOOMHandler().run();
     } catch (RuntimeException ex) {
       watchdog.cancel(true);
       throw new OOMNotResolvedException("OOM handler failed", ex);
@@ -364,11 +486,7 @@ public class CGroupElasticMemoryController extends Thread {
       // Throw an error, if we are still in OOM after 5 seconds
       while(end - start < timeoutMS) {
         end = clock.getTime();
-        String underOOM = cgroups.getCGroupParam(
-            CGroupsHandler.CGroupController.MEMORY,
-            "",
-            CGROUP_PARAM_MEMORY_OOM_CONTROL);
-        if (underOOM.contains(CGroupsHandler.UNDER_OOM)) {
+        if (isUnderOOM()) {
           if (end - lastLog > 1000) {
             LOG.warn(String.format(
                 "OOM not resolved in %d ms", end - start));
@@ -393,68 +511,6 @@ public class CGroupElasticMemoryController extends Thread {
         clock.getTime() - start));
     stopListening();
     return false;
-  }
-
-  /**
-   * Update root memory cgroup. This contains all containers.
-   * The physical limit has to be set first then the virtual limit.
-   */
-  private void setCGroupParameters() throws ResourceHandlerException {
-    // Disable the OOM killer
-    cgroups.updateCGroupParam(CGroupsHandler.CGroupController.MEMORY, "",
-        CGROUP_PARAM_MEMORY_OOM_CONTROL, "1");
-    if (controlPhysicalMemory && !controlVirtualMemory) {
-      try {
-        // Ignore virtual memory limits, since we do not know what it is set to
-        cgroups.updateCGroupParam(CGroupsHandler.CGroupController.MEMORY, "",
-            CGROUP_PARAM_MEMORY_SWAP_HARD_LIMIT_BYTES, CGROUP_NO_LIMIT);
-      } catch (ResourceHandlerException ex) {
-        LOG.debug("Swap monitoring is turned off in the kernel");
-      }
-      // Set physical memory limits
-      cgroups.updateCGroupParam(CGroupsHandler.CGroupController.MEMORY, "",
-          CGROUP_PARAM_MEMORY_HARD_LIMIT_BYTES, Long.toString(limit));
-    } else if (controlVirtualMemory && !controlPhysicalMemory) {
-      // Ignore virtual memory limits, since we do not know what it is set to
-      cgroups.updateCGroupParam(CGroupsHandler.CGroupController.MEMORY, "",
-          CGROUP_PARAM_MEMORY_SWAP_HARD_LIMIT_BYTES, CGROUP_NO_LIMIT);
-      // Set physical limits to no more than virtual limits
-      cgroups.updateCGroupParam(CGroupsHandler.CGroupController.MEMORY, "",
-          CGROUP_PARAM_MEMORY_HARD_LIMIT_BYTES, Long.toString(limit));
-      // Set virtual memory limits
-      // Important: it has to be set after physical limit is set
-      cgroups.updateCGroupParam(CGroupsHandler.CGroupController.MEMORY, "",
-          CGROUP_PARAM_MEMORY_SWAP_HARD_LIMIT_BYTES, Long.toString(limit));
-    } else {
-      throw new ResourceHandlerException(
-          String.format("Unsupported scenario physical:%b virtual:%b",
-              controlPhysicalMemory, controlVirtualMemory));
-    }
-  }
-
-  /**
-   * Reset root memory cgroup to OS defaults. This controls all containers.
-   */
-  private void resetCGroupParameters() {
-    try {
-      try {
-        // Disable memory limits
-        cgroups.updateCGroupParam(
-            CGroupsHandler.CGroupController.MEMORY, "",
-            CGROUP_PARAM_MEMORY_SWAP_HARD_LIMIT_BYTES, CGROUP_NO_LIMIT);
-      } catch (ResourceHandlerException ex) {
-        LOG.debug("Swap monitoring is turned off in the kernel");
-      }
-      cgroups.updateCGroupParam(
-          CGroupsHandler.CGroupController.MEMORY, "",
-          CGROUP_PARAM_MEMORY_HARD_LIMIT_BYTES, CGROUP_NO_LIMIT);
-      // Enable the OOM killer
-      cgroups.updateCGroupParam(
-          CGroupsHandler.CGroupController.MEMORY, "",
-          CGROUP_PARAM_MEMORY_OOM_CONTROL, "0");
-    } catch (ResourceHandlerException ex) {
-      LOG.warn("Error in cleanup", ex);
-    }
   }
 
   private static String getOOMListenerExecutablePath(Configuration conf) {
