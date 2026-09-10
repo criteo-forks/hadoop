@@ -285,6 +285,7 @@ TEST_F(OOMListenerTest, test_oom) {
 }
 
 #define CGROUP_MEMORY_EVENTS "memory.events"
+#define CGROUP_MEMORY_PRESSURE "memory.pressure"
 
 // How long to give the listener to take its baseline reading of
 // memory.events before the counters are moved under it, and how long to wait
@@ -364,6 +365,8 @@ public:
     _oom_listener_v2_descriptors descriptors = {
         "oom-listener",
         -1,
+        -1,
+        {0},
         {0},
         0,
         0,
@@ -467,6 +470,37 @@ TEST_F(OOMListenerV2Test, test_oom_kill_is_reported) {
   close(test_pipe[0]);
   close(test_pipe[1]);
   close(error_pipe[0]);
+}
+
+/*
+  No memory.pressure file, which is the normal case on a kernel that was not
+  booted with psi=1: the listener still reports events and still exits
+  successfully. This is the primary path, not an error path.
+*/
+TEST_F(OOMListenerV2Test, test_without_memory_pressure) {
+  struct stat pressure_stat = {};
+  WriteEvents(0, 0, 0, 0);
+  ASSERT_NE(0, stat(
+      std::string(GetCGroup()).append(CGROUP_MEMORY_PRESSURE).c_str(),
+      &pressure_stat)) << "The mock cgroup must not have a pressure file";
+
+  int test_pipe[2];
+  ASSERT_EQ(0, pipe(test_pipe));
+
+  pid_t listener = ForkListener(test_pipe, -1);
+  ASSERT_GE(listener, 1) << "Fork failed " << errno;
+
+  usleep(V2_SETTLE_US);
+  WriteEvents(0, 7, 0, 0);
+
+  uint64_t event_id = 0;
+  ASSERT_EQ((ssize_t) sizeof(event_id),
+            read(test_pipe[0], &event_id, sizeof(event_id)))
+                << "Events have to be reported without pressure information";
+
+  ExpectCleanExit(listener);
+  close(test_pipe[0]);
+  close(test_pipe[1]);
 }
 
 #else

@@ -121,9 +121,18 @@ typedef struct _oom_listener_v2_descriptors {
    */
   int events_fd;
   /*
+   * memory.pressure file handle carrying the PSI trigger, or -1 when the
+   * kernel does not expose pressure information. Optional by design.
+   */
+  int pressure_fd;
+  /*
    * memory.events path
    */
   char events_path[PATH_MAX];
+  /*
+   * memory.pressure path
+   */
+  char pressure_path[PATH_MAX];
   /*
    * The previous reading of the memory.events counters. high and max drive
    * the events we forward, oom and oom_kill are only reported on stderr.
@@ -145,6 +154,10 @@ inline void cleanup_v2(_oom_listener_v2_descriptors *descriptors) {
   if (descriptors->events_fd != -1) {
     close(descriptors->events_fd);
     descriptors->events_fd = -1;
+  }
+  if (descriptors->pressure_fd != -1) {
+    close(descriptors->pressure_fd);
+    descriptors->pressure_fd = -1;
   }
   descriptors->watch_timeout = 1000;
 }

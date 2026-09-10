@@ -34,6 +34,7 @@ import org.mockito.InOrder;
 
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_HIGH;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_MAX;
+import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_PRESSURE;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_STAT;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_SWAP_CURRENT;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_SWAP_MAX;
@@ -53,7 +54,8 @@ import static org.mockito.Mockito.when;
 
 /**
  * Test the cgroup v2 specifics of the elastic memory controller: the root
- * cgroup writes, and the out of memory condition with its hysteresis.
+ * cgroup writes, the out of memory condition and its hysteresis, and the
+ * optional kernel pressure refinement.
  */
 public class TestCGroupsV2ElasticMemoryController {
 
@@ -108,6 +110,8 @@ public class TestCGroupsV2ElasticMemoryController {
     when(cgroups.isCGroupsV2()).thenReturn(true);
     when(cgroups.getPathForCGroup(any(), any()))
         .thenReturn("/sys/fs/cgroup/hadoop-yarn/");
+    when(cgroups.getPathForCGroupParam(any(), any(), any()))
+        .thenReturn("/sys/fs/cgroup/hadoop-yarn/memory.pressure");
     when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_HIGH)))
         .thenReturn(Long.toString(HIGH));
     appender = new CountingAppender();
@@ -139,6 +143,16 @@ public class TestCGroupsV2ElasticMemoryController {
         .thenReturn("anon " + anon + "\nfile_mapped 0\nkernel 0\n");
   }
 
+  private void stubNoPressure() throws Exception {
+    when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_PRESSURE)))
+        .thenThrow(new ResourceHandlerException("psi=1 is not set"));
+  }
+
+  private static String pressure(long fullTotal) {
+    return "some avg10=1.00 avg60=0.50 avg300=0.10 total=123456\n"
+        + "full avg10=0.50 avg60=0.20 avg300=0.05 total=" + fullTotal + "\n";
+  }
+
   /**
    * The root writes for physical memory: swap off, then the hard limit, then
    * the throttling watermark a margin below it. Plain byte counts, and no
@@ -148,6 +162,7 @@ public class TestCGroupsV2ElasticMemoryController {
   public void testSetCGroupParametersPhysical() throws Exception {
     conf.setInt(YarnConfiguration
         .NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_HIGH_MARGIN_MB, 1024);
+    stubNoPressure();
     controller(false).setCGroupParameters();
 
     InOrder order = inOrder(cgroups);
@@ -167,6 +182,7 @@ public class TestCGroupsV2ElasticMemoryController {
   public void testSetCGroupParametersVirtual() throws Exception {
     conf.setInt(YarnConfiguration
         .NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_HIGH_MARGIN_MB, 1024);
+    stubNoPressure();
     controller(true).setCGroupParameters();
 
     InOrder order = inOrder(cgroups);
@@ -183,6 +199,7 @@ public class TestCGroupsV2ElasticMemoryController {
    */
   @Test
   public void testDefaultHighMargin() throws Exception {
+    stubNoPressure();
     controller(false).setCGroupParameters();
 
     // 5% of 8 GiB is below the floor.
@@ -199,6 +216,7 @@ public class TestCGroupsV2ElasticMemoryController {
    */
   @Test
   public void testResetCGroupParameters() throws Exception {
+    stubNoPressure();
     controller(false).resetCGroupParameters();
 
     InOrder order = inOrder(cgroups);
@@ -216,6 +234,7 @@ public class TestCGroupsV2ElasticMemoryController {
   @Test
   public void testResetCGroupParametersKeepsGoingAfterAFailure()
       throws Exception {
+    stubNoPressure();
     doThrow(new ResourceHandlerException("read only"))
         .when(cgroups).updateCGroupParam(
             MEMORY, "", CGROUP_MEMORY_HIGH, "max");
@@ -234,6 +253,7 @@ public class TestCGroupsV2ElasticMemoryController {
   public void testUnlimitedHighIsNeverBreached() throws Exception {
     conf.setLong(YarnConfiguration
         .NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_OOM_HOLD_DURATION_MS, 0);
+    stubNoPressure();
     when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_HIGH)))
         .thenReturn("max");
     stubFootprint(LIMIT);
@@ -244,25 +264,27 @@ public class TestCGroupsV2ElasticMemoryController {
   }
 
   /**
-   * The footprint over the watermark is the whole condition, and evaluating
-   * it on a healthy node is routine, so nothing is logged at WARN or above.
+   * The primary path: no memory.pressure on the host. The condition holds on
+   * the memory footprint alone, and the absence of pressure information is
+   * not an error, so nothing is logged at WARN or above.
    */
   @Test
-  public void testOutOfMemoryOnTheFootprintAlone() throws Exception {
+  public void testOutOfMemoryWithoutPressureInformation() throws Exception {
     conf.setLong(YarnConfiguration
         .NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_OOM_HOLD_DURATION_MS, 0);
+    stubNoPressure();
     stubFootprint(HIGH + 1);
 
     CGroupsV2ElasticMemoryController controller = controller(false);
-    assertTrue("The footprint condition has to trigger",
+    assertTrue("The footprint condition alone has to trigger",
         controller.isUnderOOM());
 
     stubFootprint(HIGH - 1);
     assertFalse("A footprint under the watermark must not trigger",
         controller.isUnderOOM());
 
-    assertEquals("Evaluating the condition is routine, not a warning: "
-            + appender.atLeast(Level.WARN),
+    assertEquals("A kernel without pressure information is the normal case,"
+            + " not a misconfiguration: " + appender.atLeast(Level.WARN),
         0, appender.atLeast(Level.WARN).size());
   }
 
@@ -273,6 +295,7 @@ public class TestCGroupsV2ElasticMemoryController {
   public void testHoldTimerResetsOnADip() throws Exception {
     conf.setLong(YarnConfiguration
         .NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_OOM_HOLD_DURATION_MS, 60000);
+    stubNoPressure();
     CGroupsV2ElasticMemoryController controller = controller(false);
 
     stubFootprint(HIGH + 1);
@@ -286,6 +309,66 @@ public class TestCGroupsV2ElasticMemoryController {
   }
 
   /**
+   * With pressure information available the footprint condition is narrowed
+   * by it: a flat full total means the kernel is not stalling on memory, so
+   * nothing is killed. Together with the case below this pins the invariant
+   * that the pressure term can only ever turn a true into a false.
+   */
+  @Test
+  public void testFlatPressureTotalDoesNotKill() throws Exception {
+    conf.setLong(YarnConfiguration
+        .NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_OOM_HOLD_DURATION_MS, 0);
+    when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_PRESSURE)))
+        .thenReturn(pressure(42));
+    stubFootprint(HIGH + 1);
+
+    CGroupsV2ElasticMemoryController controller = controller(false);
+    assertFalse("The first sample has no previous value to compare to",
+        controller.isUnderOOM());
+    assertFalse("A full total that did not move means no memory stall",
+        controller.isUnderOOM());
+  }
+
+  /**
+   * Both terms hold: the footprint is over the watermark and the kernel
+   * reports that memory stalled since the previous sample.
+   */
+  @Test
+  public void testFootprintAndPressureKill() throws Exception {
+    conf.setLong(YarnConfiguration
+        .NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_OOM_HOLD_DURATION_MS, 0);
+    when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_PRESSURE)))
+        .thenReturn(pressure(42))
+        .thenReturn(pressure(42))
+        .thenReturn(pressure(4711));
+    stubFootprint(HIGH + 1);
+
+    CGroupsV2ElasticMemoryController controller = controller(false);
+    assertFalse("The first sample has no previous value to compare to",
+        controller.isUnderOOM());
+    assertTrue("Both the footprint and the pressure condition hold",
+        controller.isUnderOOM());
+  }
+
+  /**
+   * A footprint under the watermark is not made out of memory by pressure.
+   */
+  @Test
+  public void testPressureAloneNeverKills() throws Exception {
+    conf.setLong(YarnConfiguration
+        .NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_OOM_HOLD_DURATION_MS, 0);
+    when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_PRESSURE)))
+        .thenReturn(pressure(42))
+        .thenReturn(pressure(4711))
+        .thenReturn(pressure(9000));
+    stubFootprint(HIGH - 1);
+
+    CGroupsV2ElasticMemoryController controller = controller(false);
+    assertFalse(controller.isUnderOOM());
+    assertFalse(controller.isUnderOOM());
+  }
+
+  /**
    * With virtual memory enforced the swap in use counts towards the
    * footprint.
    */
@@ -294,6 +377,7 @@ public class TestCGroupsV2ElasticMemoryController {
       throws Exception {
     conf.setLong(YarnConfiguration
         .NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_OOM_HOLD_DURATION_MS, 0);
+    stubNoPressure();
     stubFootprint(HIGH - 1);
     when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_SWAP_CURRENT)))
         .thenReturn("4096");
@@ -302,12 +386,25 @@ public class TestCGroupsV2ElasticMemoryController {
         controller(true).isUnderOOM());
   }
 
+  @Test
+  public void testParsePressureFullTotal() {
+    assertEquals(4711,
+        CGroupsV2ElasticMemoryController.parsePressureFullTotal(
+            pressure(4711)));
+    assertEquals("An empty file yields no counter", -1,
+        CGroupsV2ElasticMemoryController.parsePressureFullTotal(""));
+    assertEquals("A file with no full line yields no counter", -1,
+        CGroupsV2ElasticMemoryController.parsePressureFullTotal(
+            "some avg10=0.00 avg60=0.00 avg300=0.00 total=17\n"));
+  }
+
   /**
    * The kernel OOM killer getting there first is counted, by the delta the
    * listener reports, and nothing else on that stream is.
    */
   @Test
   public void testKernelOomKillsAreCounted() throws Exception {
+    stubNoPressure();
     NodeManagerMetrics metrics = mock(NodeManagerMetrics.class);
     Context context = mock(Context.class);
     when(context.getNodeManagerMetrics()).thenReturn(metrics);

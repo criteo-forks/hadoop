@@ -5013,6 +5013,18 @@
 
   <property>
     <description>
+      Additionally require the kernel to report recent memory stalling before
+      killing a container, on top of the memory footprint condition. This can
+      only narrow the condition, never widen it. It has no effect where the
+      kernel does not expose pressure information, which is the case unless
+      psi=1 is on the kernel command line. Only used with cgroup v2.
+    </description>
+    <name>yarn.nodemanager.elastic-memory-control.cgroups.v2.pressure.enabled</name>
+    <value>true</value>
+  </property>
+
+  <property>
+    <description>
       URI for NodeAttributeManager. The default value is
       /tmp/hadoop-yarn-${user}/node-attribute/ in the local filesystem.
     </description>

@@ -20,6 +20,7 @@ package org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resourc
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
+import org.apache.hadoop.classification.VisibleForTesting;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.server.nodemanager.Context;
@@ -30,11 +31,14 @@ import org.apache.hadoop.yarn.util.MonotonicClock;
 import static org.apache.hadoop.yarn.conf.YarnConfiguration.DEFAULT_NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_HIGH_MARGIN_MB;
 import static org.apache.hadoop.yarn.conf.YarnConfiguration.DEFAULT_NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_OOM_HOLD_DURATION_MS;
 import static org.apache.hadoop.yarn.conf.YarnConfiguration.DEFAULT_NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_POST_KILL_DELAY_MS;
+import static org.apache.hadoop.yarn.conf.YarnConfiguration.DEFAULT_NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_PRESSURE_ENABLED;
 import static org.apache.hadoop.yarn.conf.YarnConfiguration.NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_HIGH_MARGIN_MB;
 import static org.apache.hadoop.yarn.conf.YarnConfiguration.NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_OOM_HOLD_DURATION_MS;
 import static org.apache.hadoop.yarn.conf.YarnConfiguration.NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_POST_KILL_DELAY_MS;
+import static org.apache.hadoop.yarn.conf.YarnConfiguration.NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_PRESSURE_ENABLED;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_HIGH;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_MAX;
+import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_PRESSURE;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_SWAP_MAX;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_V2_NO_LIMIT;
 
@@ -52,7 +56,8 @@ import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.r
  * nothing about whether the footprint is reclaimable. The condition that
  * actually justifies a kill is the memory footprint of
  * {@link CGroupsV2MemoryStat} standing above memory.high without
- * interruption for the configured hold duration.
+ * interruption for the configured hold duration, optionally narrowed by the
+ * kernel reporting that memory really did stall.
  */
 class CGroupsV2ElasticMemoryController extends CGroupElasticMemoryController {
 
@@ -76,6 +81,7 @@ class CGroupsV2ElasticMemoryController extends CGroupElasticMemoryController {
   private final Clock clock = new MonotonicClock();
   private final long highMarginBytes;
   private final long holdDurationMs;
+  private final boolean pressureEnabled;
 
   /**
    * When the footprint condition started holding, 0 when it does not hold.
@@ -83,6 +89,9 @@ class CGroupsV2ElasticMemoryController extends CGroupElasticMemoryController {
    * of the base class both evaluate the condition.
    */
   private long firstBreachAtMs;
+
+  /** The previous sample of memory.pressure's full total, -1 for none. */
+  private long lastPressureTotalUs = -1;
 
   CGroupsV2ElasticMemoryController(Configuration conf,
                                    Context context,
@@ -98,6 +107,10 @@ class CGroupsV2ElasticMemoryController extends CGroupElasticMemoryController {
     this.holdDurationMs = conf.getLong(
         NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_OOM_HOLD_DURATION_MS,
         DEFAULT_NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_OOM_HOLD_DURATION_MS);
+    this.pressureEnabled = conf.getBoolean(
+        NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_PRESSURE_ENABLED,
+        DEFAULT_NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_PRESSURE_ENABLED)
+        && isPressureReadable();
     if (getOOMHandler() instanceof DefaultOOMHandler) {
       ((DefaultOOMHandler) getOOMHandler()).setPostKillDelayMs(conf.getLong(
           NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_POST_KILL_DELAY_MS,
@@ -187,9 +200,8 @@ class CGroupsV2ElasticMemoryController extends CGroupElasticMemoryController {
    *
    * The hold duration is oomd's PressureAbove hysteresis applied to the
    * footprint: the timer resets on any dip, so a condition that flaps never
-   * kills. It is deliberately applied to the footprint rather than to kernel
-   * pressure information, so that it works on a kernel that does not expose
-   * any, which is the normal state of our fleet.
+   * kills. It works the same way with kernel pressure information switched
+   * off, which is the normal state of our kernels.
    */
   @Override
   protected synchronized boolean isUnderOOM() throws ResourceHandlerException {
@@ -199,7 +211,14 @@ class CGroupsV2ElasticMemoryController extends CGroupElasticMemoryController {
     } else if (firstBreachAtMs == 0) {
       firstBreachAtMs = now;
     }
-    return firstBreachAtMs != 0 && now - firstBreachAtMs >= holdDurationMs;
+    boolean held = firstBreachAtMs != 0
+        && now - firstBreachAtMs >= holdDurationMs;
+    // Sampled on every call, whether it is needed or not, so that the delta is
+    // always between two consecutive polls.
+    boolean stalling = sampleMemoryStall();
+    // The pressure term can only ever narrow the condition. It must never be
+    // able to trigger a kill the footprint condition alone would not.
+    return held && stalling;
   }
 
   private boolean isOverHighWatermark() throws ResourceHandlerException {
@@ -213,6 +232,91 @@ class CGroupsV2ElasticMemoryController extends CGroupElasticMemoryController {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Whether the kernel reports that memory stalled since the previous sample.
+   * Returns true, that is it does not narrow anything, when pressure
+   * information is unavailable or switched off.
+   */
+  private boolean sampleMemoryStall() {
+    if (!pressureEnabled) {
+      return true;
+    }
+    long total;
+    try {
+      total = readPressureFullTotal();
+    } catch (ResourceHandlerException ex) {
+      LOG.debug("Could not read memory.pressure", ex);
+      return true;
+    }
+    if (total < 0) {
+      return true;
+    }
+    boolean stalled = lastPressureTotalUs >= 0 && total > lastPressureTotalUs;
+    lastPressureTotalUs = total;
+    return stalled;
+  }
+
+  /**
+   * Probe memory.pressure once, at construction. RHEL ships PSI compiled in
+   * but switched off, so the file being absent is the expected case on our
+   * fleet and not a misconfiguration: report it once, at INFO, and never
+   * again.
+   */
+  private boolean isPressureReadable() {
+    try {
+      if (readPressureFullTotal() >= 0) {
+        return true;
+      }
+    } catch (ResourceHandlerException ex) {
+      LOG.debug("Could not read memory.pressure", ex);
+    }
+    LOG.info("Kernel memory pressure information unavailable at {} (psi=1 is"
+        + " not set): using the memory footprint condition alone.",
+        cgroups.getPathForCGroupParam(
+            CGroupsHandler.CGroupController.MEMORY, "",
+            CGROUP_MEMORY_PRESSURE));
+    return false;
+  }
+
+  private long readPressureFullTotal() throws ResourceHandlerException {
+    return parsePressureFullTotal(cgroups.getCGroupParam(
+        CGroupsHandler.CGroupController.MEMORY, "", CGROUP_MEMORY_PRESSURE));
+  }
+
+  /**
+   * Read the full total of a memory.pressure file, whose two lines are
+   * <pre>
+   * some avg10=0.00 avg60=0.00 avg300=0.00 total=0
+   * full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+   * </pre>
+   * full is the share of time every non-idle task of the cgroup was stalled at
+   * once, and total is a monotonic microsecond counter. A delta of total
+   * between two polls cannot be missed, whereas an average has lag and can
+   * return to zero in between.
+   *
+   * @param content the contents of memory.pressure
+   * @return the full total in microseconds, -1 if it is not there
+   */
+  @VisibleForTesting
+  static long parsePressureFullTotal(String content) {
+    for (String line : content.split("\n")) {
+      String[] parts = line.trim().split("\\s+");
+      if (parts.length < 2 || !"full".equals(parts[0])) {
+        continue;
+      }
+      for (String part : parts) {
+        if (part.startsWith("total=")) {
+          try {
+            return Long.parseLong(part.substring("total=".length()));
+          } catch (NumberFormatException ex) {
+            return -1;
+          }
+        }
+      }
+    }
+    return -1;
   }
 
   /**

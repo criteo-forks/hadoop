@@ -36,6 +36,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_HIGH;
+import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_PRESSURE;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_STAT;
 import static org.junit.Assert.assertTrue;
 import static org.junit.Assert.assertEquals;
@@ -103,6 +104,9 @@ public class TestCGroupElasticMemoryController {
               underOOM ? HIGH_WATERMARK + 1 : HIGH_WATERMARK - 1));
       when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_HIGH)))
           .thenReturn(Long.toString(HIGH_WATERMARK));
+      // PSI is switched off on most kernels, which is the primary path.
+      when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_PRESSURE)))
+          .thenThrow(new ResourceHandlerException("psi=1 is not set"));
     } else {
       when(cgroups.getCGroupParam(any(), any(), any()))
           .thenReturn(underOOM ? "under_oom 1" : "under_oom 0");
