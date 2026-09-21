@@ -110,6 +110,7 @@ public class CGroupsV2OOMHandler extends DefaultOOMHandler {
   private final long holdDurationMs;
   private final long postKillDelayMs;
   private final boolean pressureEnabled;
+  private final ElasticMemoryMetrics metrics;
 
   /**
    * When the footprint condition started holding, 0 when it does not hold.
@@ -130,7 +131,7 @@ public class CGroupsV2OOMHandler extends DefaultOOMHandler {
    */
   public CGroupsV2OOMHandler(Context context, boolean enforceVirtualMemory) {
     this(context, enforceVirtualMemory, context.getConf(),
-        ResourceHandlerModule.getCGroupsHandler());
+        ResourceHandlerModule.getCGroupsHandler(), ElasticMemoryMetrics.create());
   }
 
   /**
@@ -144,6 +145,21 @@ public class CGroupsV2OOMHandler extends DefaultOOMHandler {
    */
   public CGroupsV2OOMHandler(Context context, boolean enforceVirtualMemory,
       Configuration conf, CGroupsHandler cgroups) {
+    this(context, enforceVirtualMemory, conf, cgroups,
+        ElasticMemoryMetrics.create());
+  }
+
+  /**
+   * Create an OOM handler publishing its decisions to the supplied source.
+   * @param context node manager context to work with
+   * @param enforceVirtualMemory whether swap counts towards the footprint
+   * @param conf Yarn configuration
+   * @param cgroups cgroups handler
+   * @param metrics elastic memory metrics source
+   */
+  CGroupsV2OOMHandler(Context context, boolean enforceVirtualMemory,
+      Configuration conf, CGroupsHandler cgroups,
+      ElasticMemoryMetrics metrics) {
     super(context, enforceVirtualMemory, cgroups);
     this.enforceVirtualMemory = enforceVirtualMemory;
     this.yarnCGroupPath = cgroups.getPathForCGroup(
@@ -158,6 +174,7 @@ public class CGroupsV2OOMHandler extends DefaultOOMHandler {
         NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_PRESSURE_ENABLED,
         DEFAULT_NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_PRESSURE_ENABLED)
         && isPressureReadable();
+    this.metrics = metrics;
   }
 
   /**
@@ -190,7 +207,9 @@ public class CGroupsV2OOMHandler extends DefaultOOMHandler {
   @VisibleForTesting
   synchronized Verdict evaluate() throws ResourceHandlerException {
     long now = clock.getTime();
-    boolean over = isOverHighWatermark();
+    long footprint = readFootprint();
+    boolean over = footprint > readHighWatermark();
+    metrics.memoryFootprintBytes.set(footprint);
     if (!over) {
       firstBreachAtMs = 0;
     } else if (firstBreachAtMs == 0) {
@@ -201,12 +220,18 @@ public class CGroupsV2OOMHandler extends DefaultOOMHandler {
     // Sampled on every call, whether it is needed or not, so that the delta is
     // always between two consecutive polls.
     boolean stalling = sampleMemoryStall();
+    Verdict verdict;
     if (!over) {
-      return Verdict.CLEAR;
-    }
+      verdict = Verdict.CLEAR;
+    } else {
     // The pressure term can only ever narrow the condition. It must never be
     // able to trigger a kill the footprint condition alone would not.
-    return held && stalling ? Verdict.KILL : Verdict.PENDING;
+      verdict = held && stalling ? Verdict.KILL : Verdict.PENDING;
+    }
+    metrics.setVerdict(verdict);
+    metrics.breachDurationMs.set(firstBreachAtMs == 0
+        ? 0 : now - firstBreachAtMs);
+    return verdict;
   }
 
   /**
@@ -252,17 +277,15 @@ public class CGroupsV2OOMHandler extends DefaultOOMHandler {
     return firstBreachAtMs;
   }
 
-  private boolean isOverHighWatermark() throws ResourceHandlerException {
-    long footprint = CGroupsV2MemoryStat.readFootprint(cgroups, "",
+  private long readFootprint() throws ResourceHandlerException {
+    return CGroupsV2MemoryStat.readFootprint(cgroups, "",
         enforceVirtualMemory);
+  }
+
+  private long readHighWatermark() throws ResourceHandlerException {
     long high = CGroupsV2MemoryStat.parseLimit(cgroups.getCGroupParam(
         CGroupsHandler.CGroupController.MEMORY, "", CGROUP_MEMORY_HIGH));
-    if (footprint > high) {
-      LOG.debug("{} uses {} bytes over its memory.high of {}",
-          yarnCGroupPath, footprint, high);
-      return true;
-    }
-    return false;
+    return high;
   }
 
   /**
@@ -377,6 +400,11 @@ public class CGroupsV2OOMHandler extends DefaultOOMHandler {
           container.getContainerId()), ex);
     }
     return super.sigKill(container);
+  }
+
+  @Override
+  protected void onContainerKilled(Container container) {
+    metrics.containersKilled.incr();
   }
 
   /**

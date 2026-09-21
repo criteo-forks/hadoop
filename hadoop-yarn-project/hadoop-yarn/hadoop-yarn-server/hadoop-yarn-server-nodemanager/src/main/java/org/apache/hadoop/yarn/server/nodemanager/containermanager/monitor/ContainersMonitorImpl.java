@@ -604,6 +604,9 @@ public class ContainersMonitorImpl extends AbstractService implements
               trackedContainersUtilization.getCPU());
           nmMetrics.addContainerMonitorCostTime(duration);
         }
+        if (oomListenerThread != null) {
+          oomListenerThread.sample();
+        }
 
         try {
           Thread.sleep(monitoringInterval);

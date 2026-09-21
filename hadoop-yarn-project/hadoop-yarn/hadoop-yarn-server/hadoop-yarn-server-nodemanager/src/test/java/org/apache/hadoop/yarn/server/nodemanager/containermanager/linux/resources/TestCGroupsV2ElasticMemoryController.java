@@ -20,10 +20,10 @@ package org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resourc
 import java.util.ArrayList;
 import java.util.List;
 
+import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.exceptions.YarnRuntimeException;
 import org.apache.hadoop.yarn.server.nodemanager.Context;
-import org.apache.hadoop.yarn.server.nodemanager.metrics.NodeManagerMetrics;
 import org.apache.log4j.AppenderSkeleton;
 import org.apache.log4j.Level;
 import org.apache.log4j.LogManager;
@@ -33,6 +33,7 @@ import org.junit.Before;
 import org.junit.Test;
 import org.mockito.InOrder;
 
+import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_CURRENT;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_HIGH;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_MAX;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_STAT;
@@ -40,13 +41,11 @@ import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.r
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGroupController.MEMORY;
 import static org.junit.Assert.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.inOrder;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
-import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -103,6 +102,7 @@ public class TestCGroupsV2ElasticMemoryController {
 
   @Before
   public void setUp() throws Exception {
+    DefaultMetricsSystem.setMiniClusterMode(true);
     conf = new YarnConfiguration();
     cgroups = mock(CGroupsHandler.class);
     when(cgroups.isCGroupsV2()).thenReturn(true);
@@ -147,6 +147,9 @@ public class TestCGroupsV2ElasticMemoryController {
     conf.setInt(YarnConfiguration
         .NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_HIGH_MARGIN_MB, 1024);
     controller(false).setCGroupParameters();
+    ElasticMemoryMetrics metrics = ElasticMemoryMetrics.create();
+    assertEquals(LIMIT, metrics.memoryLimitBytes.value());
+    assertEquals(LIMIT - GB, metrics.memoryHighBytes.value());
 
     InOrder order = inOrder(cgroups);
     order.verify(cgroups).updateCGroupParam(
@@ -230,21 +233,19 @@ public class TestCGroupsV2ElasticMemoryController {
    */
   @Test
   public void testKernelOomKillsAreCounted() throws Exception {
-    NodeManagerMetrics metrics = mock(NodeManagerMetrics.class);
-    Context context = mock(Context.class);
-    when(context.getNodeManagerMetrics()).thenReturn(metrics);
-
-    CGroupsV2ElasticMemoryController controller = controller(false, context);
+    ElasticMemoryMetrics metrics = ElasticMemoryMetrics.create();
+    long killsBefore = metrics.kernelOomKills.value();
+    CGroupsV2ElasticMemoryController controller = controller(false);
     controller.onListenerError("oom-listener kernel OOM: oom_kill increased"
         + " by 2 to 5 in /sys/fs/cgroup/hadoop-yarn");
-    verify(metrics).kernelOomKills(2);
+    assertEquals(killsBefore + 2, metrics.kernelOomKills.value());
 
     // An oom increment is not an oom_kill, and neither is anything else the
     // listener may write to its standard error.
     controller.onListenerError("oom-listener kernel OOM: oom increased by 1"
         + " to 3 in /sys/fs/cgroup/hadoop-yarn");
     controller.onListenerError("oom-listener something else entirely");
-    verify(metrics, times(1)).kernelOomKills(anyLong());
+    assertEquals(killsBefore + 2, metrics.kernelOomKills.value());
   }
 
   /**
@@ -263,6 +264,20 @@ public class TestCGroupsV2ElasticMemoryController {
         .thenReturn("anon 100\nfile_mapped 20\nslab 99999\n");
     assertEquals(120,
         CGroupsV2MemoryStat.readFootprint(cgroups, "", false));
+  }
+
+  @Test
+  public void testSamplePublishesFreshMeasures() throws Exception {
+    when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_STAT)))
+        .thenReturn("anon 100\nfile_mapped 20\nkernel 3\n");
+    when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_CURRENT)))
+        .thenReturn("456");
+
+    controller(false).sample();
+
+    ElasticMemoryMetrics metrics = ElasticMemoryMetrics.create();
+    assertEquals(123, metrics.memoryFootprintBytes.value());
+    assertEquals(456, metrics.memoryCurrentBytes.value());
   }
 
   /**

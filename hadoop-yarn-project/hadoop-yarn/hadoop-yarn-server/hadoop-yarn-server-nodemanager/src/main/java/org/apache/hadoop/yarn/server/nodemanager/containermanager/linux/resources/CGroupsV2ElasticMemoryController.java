@@ -24,10 +24,10 @@ import java.util.regex.Pattern;
 import org.apache.hadoop.conf.Configuration;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.server.nodemanager.Context;
-import org.apache.hadoop.yarn.server.nodemanager.metrics.NodeManagerMetrics;
 
 import static org.apache.hadoop.yarn.conf.YarnConfiguration.DEFAULT_NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_HIGH_MARGIN_MB;
 import static org.apache.hadoop.yarn.conf.YarnConfiguration.NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_HIGH_MARGIN_MB;
+import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_CURRENT;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_HIGH;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_MAX;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_SWAP_MAX;
@@ -68,6 +68,7 @@ class CGroupsV2ElasticMemoryController extends CGroupElasticMemoryController {
   private static final long DEFAULT_HIGH_MARGIN_DIVISOR = 20;
 
   private final long highMarginBytes;
+  private final ElasticMemoryMetrics metrics;
 
   CGroupsV2ElasticMemoryController(Configuration conf,
                                    Context context,
@@ -80,12 +81,17 @@ class CGroupsV2ElasticMemoryController extends CGroupElasticMemoryController {
     super(conf, context, cgroups, controlPhysicalMemory, controlVirtualMemory,
         limit, oomHandlerOverride);
     this.highMarginBytes = computeHighMargin();
+    this.metrics = ElasticMemoryMetrics.create();
+    metrics.cgroupVersion.set(2);
+    metrics.memoryLimitBytes.set(limit);
+    metrics.memoryHighBytes.set(limit - highMarginBytes);
   }
 
   @Override
   protected DefaultOOMHandler newDefaultOOMHandler(Context context,
       boolean controlVirtual) {
-    return new CGroupsV2OOMHandler(context, controlVirtual, conf, cgroups);
+    return new CGroupsV2OOMHandler(context, controlVirtual, conf, cgroups,
+        ElasticMemoryMetrics.create());
   }
 
   /**
@@ -101,6 +107,8 @@ class CGroupsV2ElasticMemoryController extends CGroupElasticMemoryController {
     } catch (RuntimeException ex) {
       LOG.warn("The OOM handler failed. Still listening: the kernel enforces"
           + " the limit of " + yarnCGroupPath, ex);
+    } finally {
+      metrics.clearVerdict();
     }
   }
 
@@ -191,10 +199,20 @@ class CGroupsV2ElasticMemoryController extends CGroupElasticMemoryController {
     }
     LOG.warn("The kernel OOM killer acted inside {} before the NodeManager"
         + " could choose a victim: {}", yarnCGroupPath, line);
-    NodeManagerMetrics metrics =
-        context == null ? null : context.getNodeManagerMetrics();
-    if (metrics != null) {
-      metrics.kernelOomKills(Long.parseLong(matcher.group(1)));
+    metrics.kernelOomKills.incr(Long.parseLong(matcher.group(1)));
+  }
+
+  @Override
+  public void sample() {
+    try {
+      metrics.memoryFootprintBytes.set(CGroupsV2MemoryStat.readFootprint(
+          cgroups, "", controlVirtualMemory));
+      metrics.memoryCurrentBytes.set(CGroupsV2MemoryStat.parseLimit(
+          cgroups.getCGroupParam(
+              CGroupsHandler.CGroupController.MEMORY, "",
+              CGROUP_MEMORY_CURRENT)));
+    } catch (ResourceHandlerException | NumberFormatException ex) {
+      LOG.debug("Could not sample elastic memory controller state", ex);
     }
   }
 

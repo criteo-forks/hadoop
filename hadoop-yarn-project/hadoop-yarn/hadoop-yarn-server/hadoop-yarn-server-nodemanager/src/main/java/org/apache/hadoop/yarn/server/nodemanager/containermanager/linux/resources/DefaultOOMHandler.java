@@ -298,10 +298,19 @@ public class DefaultOOMHandler implements Runnable {
             "container %s killed by elastic cgroups OOM handler.",
             candidate.container.getContainerId());
         LOG.warn(message);
+        onContainerKilled(candidate.container);
         containerKilled = true;
       }
     }
     return containerKilled;
+  }
+
+  /**
+   * Called after a container was successfully killed by this handler.
+   * Subclasses may use it for version-specific accounting.
+   * @param container container that was killed
+   */
+  protected void onContainerKilled(Container container) {
   }
 
   /**

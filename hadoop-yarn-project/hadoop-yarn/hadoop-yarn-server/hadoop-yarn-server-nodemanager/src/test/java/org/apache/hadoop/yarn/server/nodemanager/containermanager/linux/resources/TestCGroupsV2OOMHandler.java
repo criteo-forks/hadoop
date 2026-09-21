@@ -25,6 +25,7 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 import org.apache.commons.io.FileUtils;
+import org.apache.hadoop.metrics2.lib.DefaultMetricsSystem;
 import org.apache.hadoop.yarn.api.records.ContainerId;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.exceptions.YarnRuntimeException;
@@ -121,6 +122,7 @@ public class TestCGroupsV2OOMHandler {
 
   @Before
   public void setUp() throws Exception {
+    DefaultMetricsSystem.setMiniClusterMode(true);
     conf = new YarnConfiguration();
     cgroups = mock(CGroupsHandler.class);
     when(cgroups.isCGroupsV2()).thenReturn(true);
@@ -208,10 +210,19 @@ public class TestCGroupsV2OOMHandler {
     CGroupsV2OOMHandler handler = handler(false);
     assertEquals("The footprint condition alone has to trigger",
         Verdict.KILL, handler.evaluate());
+    ElasticMemoryMetrics metrics = ElasticMemoryMetrics.create();
+    assertEquals(HIGH + 1, metrics.memoryFootprintBytes.value());
+    assertEquals(0, metrics.verdictClear.value());
+    assertEquals(0, metrics.verdictPending.value());
+    assertEquals(1, metrics.verdictKill.value());
 
     stubFootprint(HIGH - 1);
     assertEquals("A footprint under the watermark must not trigger",
         Verdict.CLEAR, handler.evaluate());
+    assertEquals(1, metrics.verdictClear.value());
+    assertEquals(0, metrics.verdictPending.value());
+    assertEquals(0, metrics.verdictKill.value());
+    assertEquals(0, metrics.breachDurationMs.value());
 
     assertEquals("A kernel without pressure information is the normal case,"
             + " not a misconfiguration: " + appender.atLeast(Level.WARN),
@@ -438,12 +449,15 @@ public class TestCGroupsV2OOMHandler {
     // 6 + 4 + 1 MB against the same request
     File cGroup2 = stubContainer(c2, memoryStat(6, 4, 1));
 
+    ElasticMemoryMetrics metrics = ElasticMemoryMetrics.create();
+    long killsBefore = metrics.containersKilled.value();
     killingHandler(context, 1).run();
 
     assertTrue("The container over its request had to be the victim",
         new File(cGroup2, CGROUP_KILL_FILE).exists());
     assertFalse("The container within its request had to be spared",
         new File(cGroup1, CGROUP_KILL_FILE).exists());
+    assertEquals(killsBefore + 1, metrics.containersKilled.value());
   }
 
   /**
@@ -486,12 +500,15 @@ public class TestCGroupsV2OOMHandler {
     Context context = contextOf(containers);
     File cGroup = stubContainer(c1, memoryStat(1, 0, 0));
 
+    ElasticMemoryMetrics metrics = ElasticMemoryMetrics.create();
+    long killsBefore = metrics.containersKilled.value();
     killingHandler(context, 1).run();
 
     assertEquals("The kill has to go through cgroup.kill", "1",
         FileUtils.readFileToString(new File(cGroup, CGROUP_KILL_FILE),
             StandardCharsets.UTF_8));
     verify(context.getContainerExecutor(), times(0)).signalContainer(any());
+    assertEquals(killsBefore + 1, metrics.containersKilled.value());
   }
 
   /**

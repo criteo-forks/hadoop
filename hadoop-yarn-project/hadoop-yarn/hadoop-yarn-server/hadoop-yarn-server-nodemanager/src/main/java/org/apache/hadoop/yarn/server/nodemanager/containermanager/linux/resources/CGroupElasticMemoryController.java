@@ -275,6 +275,10 @@ public abstract class CGroupElasticMemoryController extends Thread {
   protected void onListenerError(String line) {
   }
 
+  /** Publish a fresh controller sample, when this cgroup version has one. */
+  public void sample() {
+  }
+
   /**
    * The out of memory handler, so that a subclass can configure it further.
    * @return the handler this controller calls on an out of memory event
