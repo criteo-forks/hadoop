@@ -36,10 +36,13 @@ import java.nio.file.Paths;
 
 import static org.apache.hadoop.yarn.conf.YarnConfiguration.DEFAULT_NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_OOM_HOLD_DURATION_MS;
 import static org.apache.hadoop.yarn.conf.YarnConfiguration.DEFAULT_NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_POST_KILL_DELAY_MS;
+import static org.apache.hadoop.yarn.conf.YarnConfiguration.DEFAULT_NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_PRESSURE_ENABLED;
 import static org.apache.hadoop.yarn.conf.YarnConfiguration.NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_OOM_HOLD_DURATION_MS;
 import static org.apache.hadoop.yarn.conf.YarnConfiguration.NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_POST_KILL_DELAY_MS;
+import static org.apache.hadoop.yarn.conf.YarnConfiguration.NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_PRESSURE_ENABLED;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_KILL_FILE;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_HIGH;
+import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_PRESSURE;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_PROCS_FILE;
 
 /**
@@ -61,7 +64,8 @@ import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.r
  * nothing about whether the footprint is reclaimable. The condition that
  * actually justifies a kill is the memory footprint of
  * {@link CGroupsV2MemoryStat} standing above memory.high without
- * interruption for the configured hold duration.
+ * interruption for the configured hold duration, optionally narrowed by the
+ * kernel reporting that memory really did stall.
  *
  * That verdict takes time to settle, so {@link #isUnderOOM()} blocks until
  * it has: the kill loop kills when the footprint held, and returns when it
@@ -87,8 +91,15 @@ public class CGroupsV2OOMHandler extends DefaultOOMHandler {
   private static final long OOM_POLL_INTERVAL_MS = 100;
 
   /**
-   * The out of memory verdict. PENDING is over memory.high, but not yet for
-   * the hold duration.
+   * How often {@link #awaitOOM()} repeats that the footprint is held over
+   * memory.high past the hold duration and only the kernel pressure term
+   * keeps it from killing. A node can sit there for a long time, legitimately.
+   */
+  private static final long PENDING_LOG_INTERVAL_MS = 60000;
+
+  /**
+   * The out of memory verdict. PENDING is over memory.high but not yet
+   * for the hold duration, or held but without the kernel reporting a stall.
    */
   @VisibleForTesting
   enum Verdict { CLEAR, PENDING, KILL }
@@ -98,12 +109,16 @@ public class CGroupsV2OOMHandler extends DefaultOOMHandler {
   private final String yarnCGroupPath;
   private final long holdDurationMs;
   private final long postKillDelayMs;
+  private final boolean pressureEnabled;
 
   /**
    * When the footprint condition started holding, 0 when it does not hold.
    * Guarded by the monitor of this object.
    */
   private long firstBreachAtMs;
+
+  /** The previous sample of memory.pressure's full total, -1 for none. */
+  private long lastPressureTotalUs = -1;
 
   /**
    * Create an OOM handler on the configuration and the cgroups handler of
@@ -123,8 +138,8 @@ public class CGroupsV2OOMHandler extends DefaultOOMHandler {
    * @param context node manager context to work with
    * @param enforceVirtualMemory true if virtual memory needs to be checked,
    *                   false if physical memory needs to be checked instead
-   * @param conf Yarn configuration to read the hold duration and the post
-   *             kill delay from
+   * @param conf Yarn configuration to read the hold duration, the pressure
+   *             switch and the post kill delay from
    * @param cgroups the cgroups handler to read and write cgroups with
    */
   public CGroupsV2OOMHandler(Context context, boolean enforceVirtualMemory,
@@ -139,6 +154,10 @@ public class CGroupsV2OOMHandler extends DefaultOOMHandler {
     this.postKillDelayMs = conf.getLong(
         NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_POST_KILL_DELAY_MS,
         DEFAULT_NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_POST_KILL_DELAY_MS);
+    this.pressureEnabled = conf.getBoolean(
+        NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_PRESSURE_ENABLED,
+        DEFAULT_NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_PRESSURE_ENABLED)
+        && isPressureReadable();
   }
 
   /**
@@ -151,7 +170,8 @@ public class CGroupsV2OOMHandler extends DefaultOOMHandler {
    *
    * The hold duration is oomd's PressureAbove hysteresis applied to the
    * footprint: the timer resets on any dip, so a condition that flaps never
-   * kills.
+   * kills. It works the same way with kernel pressure information switched
+   * off, which is the normal state of our kernels.
    *
    * A memory.high event wakes the kill loop up before the verdict can be
    * known, so this blocks while the verdict is pending. See
@@ -170,20 +190,31 @@ public class CGroupsV2OOMHandler extends DefaultOOMHandler {
   @VisibleForTesting
   synchronized Verdict evaluate() throws ResourceHandlerException {
     long now = clock.getTime();
-    if (!isOverHighWatermark()) {
+    boolean over = isOverHighWatermark();
+    if (!over) {
       firstBreachAtMs = 0;
-      return Verdict.CLEAR;
-    }
-    if (firstBreachAtMs == 0) {
+    } else if (firstBreachAtMs == 0) {
       firstBreachAtMs = now;
     }
-    return now - firstBreachAtMs >= holdDurationMs
-        ? Verdict.KILL : Verdict.PENDING;
+    boolean held = firstBreachAtMs != 0
+        && now - firstBreachAtMs >= holdDurationMs;
+    // Sampled on every call, whether it is needed or not, so that the delta is
+    // always between two consecutive polls.
+    boolean stalling = sampleMemoryStall();
+    if (!over) {
+      return Verdict.CLEAR;
+    }
+    // The pressure term can only ever narrow the condition. It must never be
+    // able to trigger a kill the footprint condition alone would not.
+    return held && stalling ? Verdict.KILL : Verdict.PENDING;
   }
 
   /**
    * Block while the verdict is pending, re-evaluating every
-   * {@link #OOM_POLL_INTERVAL_MS}. The hold is expected and silent.
+   * {@link #OOM_POLL_INTERVAL_MS}. The hold itself is expected and silent. A
+   * verdict still pending past the hold can only be the kernel pressure term
+   * holding it back, which is logged once and then every
+   * {@link #PENDING_LOG_INTERVAL_MS}.
    *
    * @return true when the footprint held above memory.high for the hold
    *         duration, so a container has to be killed; false when it dipped,
@@ -192,10 +223,21 @@ public class CGroupsV2OOMHandler extends DefaultOOMHandler {
    */
   @VisibleForTesting
   boolean awaitOOM() throws ResourceHandlerException {
+    long lastLog = -1;
     while (true) {
       Verdict verdict = evaluate();
       if (verdict != Verdict.PENDING) {
         return verdict == Verdict.KILL;
+      }
+      long now = clock.getTime();
+      long overFor = now - breachStartMs();
+      if (overFor >= holdDurationMs
+          && (lastLog < 0 || now - lastLog >= PENDING_LOG_INTERVAL_MS)) {
+        LOG.warn("{} has had its memory footprint over memory.high for {} ms,"
+            + " past the {} ms hold, but the kernel reports no memory stall."
+            + " Waiting for one before killing a container", yarnCGroupPath,
+            overFor, holdDurationMs);
+        lastLog = now;
       }
       try {
         Thread.sleep(OOM_POLL_INTERVAL_MS);
@@ -204,6 +246,10 @@ public class CGroupsV2OOMHandler extends DefaultOOMHandler {
         return false;
       }
     }
+  }
+
+  private synchronized long breachStartMs() {
+    return firstBreachAtMs;
   }
 
   private boolean isOverHighWatermark() throws ResourceHandlerException {
@@ -217,6 +263,91 @@ public class CGroupsV2OOMHandler extends DefaultOOMHandler {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Whether the kernel reports that memory stalled since the previous sample.
+   * Returns true, that is it does not narrow anything, when pressure
+   * information is unavailable or switched off.
+   */
+  private boolean sampleMemoryStall() {
+    if (!pressureEnabled) {
+      return true;
+    }
+    long total;
+    try {
+      total = readPressureFullTotal();
+    } catch (ResourceHandlerException ex) {
+      LOG.debug("Could not read memory.pressure", ex);
+      return true;
+    }
+    if (total < 0) {
+      return true;
+    }
+    boolean stalled = lastPressureTotalUs >= 0 && total > lastPressureTotalUs;
+    lastPressureTotalUs = total;
+    return stalled;
+  }
+
+  /**
+   * Probe memory.pressure once, at construction. RHEL ships PSI compiled in
+   * but switched off, so the file being absent is the expected case on our
+   * fleet and not a misconfiguration: report it once, at INFO, and never
+   * again.
+   */
+  private boolean isPressureReadable() {
+    try {
+      if (readPressureFullTotal() >= 0) {
+        return true;
+      }
+    } catch (ResourceHandlerException ex) {
+      LOG.debug("Could not read memory.pressure", ex);
+    }
+    LOG.info("Kernel memory pressure information unavailable at {} (psi=1 is"
+        + " not set): using the memory footprint condition alone.",
+        cgroups.getPathForCGroupParam(
+            CGroupsHandler.CGroupController.MEMORY, "",
+            CGROUP_MEMORY_PRESSURE));
+    return false;
+  }
+
+  private long readPressureFullTotal() throws ResourceHandlerException {
+    return parsePressureFullTotal(cgroups.getCGroupParam(
+        CGroupsHandler.CGroupController.MEMORY, "", CGROUP_MEMORY_PRESSURE));
+  }
+
+  /**
+   * Read the full total of a memory.pressure file, whose two lines are
+   * <pre>
+   * some avg10=0.00 avg60=0.00 avg300=0.00 total=0
+   * full avg10=0.00 avg60=0.00 avg300=0.00 total=0
+   * </pre>
+   * full is the share of time every non-idle task of the cgroup was stalled at
+   * once, and total is a monotonic microsecond counter. A delta of total
+   * between two polls cannot be missed, whereas an average has lag and can
+   * return to zero in between.
+   *
+   * @param content the contents of memory.pressure
+   * @return the full total in microseconds, -1 if it is not there
+   */
+  @VisibleForTesting
+  static long parsePressureFullTotal(String content) {
+    for (String line : content.split("\n")) {
+      String[] parts = line.trim().split("\\s+");
+      if (parts.length < 2 || !"full".equals(parts[0])) {
+        continue;
+      }
+      for (String part : parts) {
+        if (part.startsWith("total=")) {
+          try {
+            return Long.parseLong(part.substring("total=".length()));
+          } catch (NumberFormatException ex) {
+            return -1;
+          }
+        }
+      }
+    }
+    return -1;
   }
 
   /**

@@ -131,6 +131,7 @@ public interface CGroupsHandler {
   String CGROUP_MEMORY_SWAP_CURRENT = "swap.current";
   String CGROUP_MEMORY_EVENTS = "events";
   String CGROUP_MEMORY_STAT = "stat";
+  String CGROUP_MEMORY_PRESSURE = "pressure";
   /** The value the v2 limit files read and accept when there is no limit. */
   String CGROUP_V2_NO_LIMIT = "max";
 

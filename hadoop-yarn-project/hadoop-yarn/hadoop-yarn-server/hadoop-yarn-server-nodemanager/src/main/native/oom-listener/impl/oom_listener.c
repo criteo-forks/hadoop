@@ -35,6 +35,15 @@ static inline void print_error(const char *file, const char *message,
 }
 
 /*
+ * The memory.pressure trigger we install when the kernel exposes pressure
+ * information: 15% of a one second window with every non-idle task of the
+ * cgroup stalled on memory at once. The kernel only accepts windows between
+ * 500 ms and 10 s, and notifies at most once per window.
+ */
+#define OOM_LISTENER_PSI_STALL_US 150000
+#define OOM_LISTENER_PSI_WINDOW_US 1000000
+
+/*
  * Compose <cgroup>/<file>, coping with a cgroup path that already ends in a
  * separator.
  */
@@ -228,6 +237,51 @@ static int read_memory_events(_oom_listener_v2_descriptors *descriptors,
 }
 
 /*
+ * Try to install a memory.pressure trigger, so that we also wake up when the
+ * kernel reports that memory really stalled.
+ *
+ * This is optional and failing to install it is the expected case: RHEL ships
+ * PSI compiled in but switched off, so without psi=1 on the kernel command
+ * line the file is absent. Report it once and carry on with memory.events
+ * alone. The listener must never exit non-zero, and never degrade its
+ * memory.events handling, because pressure information is unavailable.
+ */
+static void open_pressure_trigger(_oom_listener_v2_descriptors *descriptors,
+                                  const char *cgroup) {
+  char trigger[64];
+  int written;
+
+  descriptors->pressure_fd = -1;
+  if (build_cgroup_file_path(descriptors->command, descriptors->pressure_path,
+                             sizeof(descriptors->pressure_path),
+                             cgroup, "memory.pressure") != 0) {
+    return;
+  }
+
+  /* A trigger can only be installed through a writable descriptor. */
+  if ((descriptors->pressure_fd =
+           open(descriptors->pressure_path, O_RDWR | O_NONBLOCK)) == -1) {
+    print_error(descriptors->command,
+                "kernel memory pressure information unavailable at %s,"
+                " watching memory.events alone. errno:%d %s\n",
+                descriptors->pressure_path, errno, strerror(errno));
+    return;
+  }
+
+  written = snprintf(trigger, sizeof(trigger), "full %d %d",
+                     OOM_LISTENER_PSI_STALL_US, OOM_LISTENER_PSI_WINDOW_US);
+  if (written < 0 || (size_t) written >= sizeof(trigger) ||
+      write(descriptors->pressure_fd, trigger, (size_t) written) == -1) {
+    print_error(descriptors->command,
+                "could not install the memory pressure trigger '%s' on %s,"
+                " watching memory.events alone. errno:%d %s\n",
+                trigger, descriptors->pressure_path, errno, strerror(errno));
+    close(descriptors->pressure_fd);
+    descriptors->pressure_fd = -1;
+  }
+}
+
+/*
  * Listen to OOM events in a cgroup v2 memory cgroup.
  * See declaration for details.
  */
@@ -258,41 +312,58 @@ int oom_listener_v2(_oom_listener_v2_descriptors *descriptors,
     return EXIT_FAILURE;
   }
 
+  open_pressure_trigger(descriptors, cgroup);
+
   /*
    * Listen to events as long as the cgroup exists and forward them to the fd
    * in the argument.
    */
   for (;;) {
+    struct pollfd poll_fds[2];
+    int poll_count = 0;
     int ret;
     struct stat stat_buffer = {0};
     uint64_t high = descriptors->last_high;
     uint64_t max = descriptors->last_max;
     uint64_t oom = descriptors->last_oom;
     uint64_t oom_kill = descriptors->last_oom_kill;
-    struct pollfd poll_fd = {
-        .fd = descriptors->events_fd,
-        .events = POLLPRI
-    };
+
+    poll_fds[poll_count].fd = descriptors->events_fd;
+    poll_fds[poll_count].events = POLLPRI;
+    poll_fds[poll_count].revents = 0;
+    ++poll_count;
+    if (descriptors->pressure_fd != -1) {
+      poll_fds[poll_count].fd = descriptors->pressure_fd;
+      poll_fds[poll_count].events = POLLPRI;
+      poll_fds[poll_count].revents = 0;
+      ++poll_count;
+    }
 
     /*
-     * Only POLLPRI is requested. memory.events is a plain kernfs file, and
-     * kernfs_generic_poll() sleeps until the file's event counter moves and
-     * then returns DEFAULT_POLLMASK|EPOLLERR|EPOLLPRI (fs/kernfs/file.c, the
-     * same in 4.19 and in 6.12, only refactored out of kernfs_fop_poll in
-     * between). Three things follow from that.
+     * Only POLLPRI is requested, and the two descriptors in the set have to
+     * be read differently. Both claims below are from the kernel sources.
      *
-     * POLLERR accompanies every legitimate notification, so it must never be
-     * read as an error here. POLLHUP is never set at all, so a cgroup that
-     * goes away has to be caught by the stat() below and by the read failing
-     * instead. And asking for POLLIN would spin, because kernfs files always
-     * report themselves readable.
+     * memory.events is a plain kernfs file. kernfs_generic_poll() sleeps
+     * until the file's event counter moves and then returns
+     * DEFAULT_POLLMASK|EPOLLERR|EPOLLPRI (fs/kernfs/file.c, the same in 4.19
+     * and in 6.12, only refactored out of kernfs_fop_poll in between). So
+     * POLLERR accompanies every legitimate notification here and must never
+     * be read as an error, and POLLHUP is never set at all: a cgroup that
+     * goes away is caught by the stat() below and by the read failing.
      *
-     * It also means a plain file, which is what the unit test fixture is,
-     * only ever times out here. That is what turns this into a poll of
-     * memory.events at watch_timeout and makes the mock test possible, so
-     * the counters are compared on the timeout path too.
+     * memory.pressure is not. psi_trigger_poll() (kernel/sched/psi.c)
+     * returns DEFAULT_POLLMASK|EPOLLPRI for a trigger that fired, and adds
+     * EPOLLERR only once the trigger is gone or PSI is switched off. There
+     * POLLERR is terminal and has to be acted on, because such a descriptor
+     * reports POLLPRI on every poll and would spin this loop.
+     *
+     * Asking for POLLIN would spin on both, since kernfs files always report
+     * themselves readable. It also means a plain file, which is what the
+     * unit test fixture is, only ever times out here. That is what turns
+     * this into a poll of memory.events at watch_timeout and makes the mock
+     * test possible, so the counters are compared on the timeout path too.
      */
-    ret = poll(&poll_fd, 1, descriptors->watch_timeout);
+    ret = poll(poll_fds, (nfds_t) poll_count, descriptors->watch_timeout);
     if (ret < 0) {
       if (errno == EINTR) {
         continue;
@@ -306,6 +377,17 @@ int oom_listener_v2(_oom_listener_v2_descriptors *descriptors,
     /* Quit, if the cgroup is deleted */
     if (stat(cgroup, &stat_buffer) != 0) {
       break;
+    }
+
+    /* A pressure trigger that died is dropped, and that is all. */
+    if (poll_count > 1 &&
+        (poll_fds[1].revents & (POLLERR | POLLHUP | POLLNVAL)) != 0) {
+      print_error(descriptors->command,
+                  "the memory pressure trigger on %s is gone,"
+                  " watching memory.events alone\n",
+                  descriptors->pressure_path);
+      close(descriptors->pressure_fd);
+      descriptors->pressure_fd = -1;
     }
 
     if (read_memory_events(descriptors, &high, &max, &oom, &oom_kill) != 0) {

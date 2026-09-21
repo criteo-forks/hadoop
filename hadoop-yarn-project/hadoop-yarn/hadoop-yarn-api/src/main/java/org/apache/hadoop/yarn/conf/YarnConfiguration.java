@@ -1808,6 +1808,17 @@ public class YarnConfiguration extends Configuration {
   public static final long
       DEFAULT_NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_POST_KILL_DELAY_MS = 500;
 
+  /**
+   * Whether to additionally require the kernel to report recent memory
+   * stalling before killing a container with cgroup v2. It has no effect
+   * where the kernel does not expose pressure information.
+   */
+  public static final String
+      NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_PRESSURE_ENABLED =
+      NM_PREFIX + "elastic-memory-control.cgroups.v2.pressure.enabled";
+  public static final boolean
+      DEFAULT_NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_PRESSURE_ENABLED = true;
+
   /** Number of Virtual CPU Cores which can be allocated for containers.*/
   public static final String NM_VCORES = NM_PREFIX + "resource.cpu-vcores";
   public static final int DEFAULT_NM_VCORES = 8;

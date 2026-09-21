@@ -96,7 +96,9 @@ int main(int argc, char *argv[]) {
     _oom_listener_v2_descriptors v2_descriptors = {
         .command = argv[0],
         .events_fd = -1,
+        .pressure_fd = -1,
         .events_path = {0},
+        .pressure_path = {0},
         .last_high = 0,
         .last_max = 0,
         .last_oom = 0,

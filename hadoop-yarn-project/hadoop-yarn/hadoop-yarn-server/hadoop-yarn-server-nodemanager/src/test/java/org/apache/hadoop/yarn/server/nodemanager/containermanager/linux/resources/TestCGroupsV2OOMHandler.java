@@ -45,6 +45,7 @@ import org.junit.rules.TemporaryFolder;
 
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_KILL_FILE;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_HIGH;
+import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_PRESSURE;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_STAT;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_SWAP_CURRENT;
 import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_PROCS_FILE;
@@ -64,9 +65,10 @@ import static org.mockito.Mockito.when;
 
 /**
  * Test the cgroup v2 out of memory handler: the out of memory verdict and
- * its hysteresis, the wait for the verdict, and the v2 way of measuring and
- * killing a container. The victim policy is inherited from
- * {@link DefaultOOMHandler} and is tested in {@link TestDefaultOOMHandler}.
+ * its hysteresis, the optional kernel pressure refinement, the wait for the
+ * verdict, and the v2 way of measuring and killing a container. The victim
+ * policy is inherited from {@link DefaultOOMHandler} and is tested in
+ * {@link TestDefaultOOMHandler}.
  */
 public class TestCGroupsV2OOMHandler {
 
@@ -124,6 +126,8 @@ public class TestCGroupsV2OOMHandler {
     when(cgroups.isCGroupsV2()).thenReturn(true);
     when(cgroups.getPathForCGroup(any(), any()))
         .thenReturn("/sys/fs/cgroup/hadoop-yarn/");
+    when(cgroups.getPathForCGroupParam(any(), any(), any()))
+        .thenReturn("/sys/fs/cgroup/hadoop-yarn/memory.pressure");
     when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_HIGH)))
         .thenReturn(Long.toString(HIGH));
     appender = new CountingAppender();
@@ -159,6 +163,16 @@ public class TestCGroupsV2OOMHandler {
         .thenReturn("anon " + anon + "\nfile_mapped 0\nkernel 0\n");
   }
 
+  private void stubNoPressure() throws Exception {
+    when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_PRESSURE)))
+        .thenThrow(new ResourceHandlerException("psi=1 is not set"));
+  }
+
+  private static String pressure(long fullTotal) {
+    return "some avg10=1.00 avg60=0.50 avg300=0.10 total=123456\n"
+        + "full avg10=0.50 avg60=0.20 avg300=0.05 total=" + fullTotal + "\n";
+  }
+
   private static long elapsedMs(long startNanos) {
     return (System.nanoTime() - startNanos) / 1000000;
   }
@@ -170,6 +184,7 @@ public class TestCGroupsV2OOMHandler {
   @Test
   public void testUnlimitedHighIsNeverBreached() throws Exception {
     setHold(0);
+    stubNoPressure();
     when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_HIGH)))
         .thenReturn("max");
     stubFootprint(LIMIT);
@@ -180,13 +195,14 @@ public class TestCGroupsV2OOMHandler {
   }
 
   /**
-   * The footprint over memory.high for the hold duration is the whole
-   * condition, and a footprint that goes back under clears it. Neither is a
-   * situation to log at WARN or above.
+   * The primary path: no memory.pressure on the host. The condition holds on
+   * the memory footprint alone, and the absence of pressure information is
+   * not an error, so nothing is logged at WARN or above.
    */
   @Test
-  public void testOutOfMemoryAfterTheHold() throws Exception {
+  public void testOutOfMemoryWithoutPressureInformation() throws Exception {
     setHold(0);
+    stubNoPressure();
     stubFootprint(HIGH + 1);
 
     CGroupsV2OOMHandler handler = handler(false);
@@ -197,8 +213,8 @@ public class TestCGroupsV2OOMHandler {
     assertEquals("A footprint under the watermark must not trigger",
         Verdict.CLEAR, handler.evaluate());
 
-    assertEquals("Neither verdict is worth a warning: "
-            + appender.atLeast(Level.WARN),
+    assertEquals("A kernel without pressure information is the normal case,"
+            + " not a misconfiguration: " + appender.atLeast(Level.WARN),
         0, appender.atLeast(Level.WARN).size());
   }
 
@@ -208,6 +224,7 @@ public class TestCGroupsV2OOMHandler {
   @Test
   public void testHoldTimerResetsOnADip() throws Exception {
     setHold(60000);
+    stubNoPressure();
     CGroupsV2OOMHandler handler = handler(false);
 
     stubFootprint(HIGH + 1);
@@ -221,6 +238,63 @@ public class TestCGroupsV2OOMHandler {
   }
 
   /**
+   * With pressure information available the footprint condition is narrowed
+   * by it: a flat full total means the kernel is not stalling on memory, so
+   * nothing is killed. Together with the case below this pins the invariant
+   * that the pressure term can only ever turn a kill into a wait.
+   */
+  @Test
+  public void testFlatPressureTotalDoesNotKill() throws Exception {
+    setHold(0);
+    when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_PRESSURE)))
+        .thenReturn(pressure(42));
+    stubFootprint(HIGH + 1);
+
+    CGroupsV2OOMHandler handler = handler(false);
+    assertEquals("The first sample has no previous value to compare to",
+        Verdict.PENDING, handler.evaluate());
+    assertEquals("A full total that did not move means no memory stall",
+        Verdict.PENDING, handler.evaluate());
+  }
+
+  /**
+   * Both terms hold: the footprint is over the watermark and the kernel
+   * reports that memory stalled since the previous sample.
+   */
+  @Test
+  public void testFootprintAndPressureKill() throws Exception {
+    setHold(0);
+    when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_PRESSURE)))
+        .thenReturn(pressure(42))
+        .thenReturn(pressure(42))
+        .thenReturn(pressure(4711));
+    stubFootprint(HIGH + 1);
+
+    CGroupsV2OOMHandler handler = handler(false);
+    assertEquals("The first sample has no previous value to compare to",
+        Verdict.PENDING, handler.evaluate());
+    assertEquals("Both the footprint and the pressure condition hold",
+        Verdict.KILL, handler.evaluate());
+  }
+
+  /**
+   * A footprint under the watermark is not made out of memory by pressure.
+   */
+  @Test
+  public void testPressureAloneNeverKills() throws Exception {
+    setHold(0);
+    when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_PRESSURE)))
+        .thenReturn(pressure(42))
+        .thenReturn(pressure(4711))
+        .thenReturn(pressure(9000));
+    stubFootprint(HIGH - 1);
+
+    CGroupsV2OOMHandler handler = handler(false);
+    assertEquals(Verdict.CLEAR, handler.evaluate());
+    assertEquals(Verdict.CLEAR, handler.evaluate());
+  }
+
+  /**
    * With virtual memory enforced the swap in use counts towards the
    * footprint.
    */
@@ -228,12 +302,24 @@ public class TestCGroupsV2OOMHandler {
   public void testSwapCountsTowardsTheFootprintOnVirtualMemory()
       throws Exception {
     setHold(0);
+    stubNoPressure();
     stubFootprint(HIGH - 1);
     when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_SWAP_CURRENT)))
         .thenReturn("4096");
 
     assertEquals("rss + swap is over the watermark",
         Verdict.KILL, handler(true).evaluate());
+  }
+
+  @Test
+  public void testParsePressureFullTotal() {
+    assertEquals(4711,
+        CGroupsV2OOMHandler.parsePressureFullTotal(pressure(4711)));
+    assertEquals("An empty file yields no counter", -1,
+        CGroupsV2OOMHandler.parsePressureFullTotal(""));
+    assertEquals("A file with no full line yields no counter", -1,
+        CGroupsV2OOMHandler.parsePressureFullTotal(
+            "some avg10=0.00 avg60=0.00 avg300=0.00 total=17\n"));
   }
 
   /**
@@ -245,6 +331,7 @@ public class TestCGroupsV2OOMHandler {
   @Test(timeout = 20000)
   public void testAwaitOOMWaitsThroughTheHold() throws Exception {
     setHold(300);
+    stubNoPressure();
     stubFootprint(HIGH + 1);
     CGroupsV2OOMHandler handler = handler(false);
 
@@ -267,6 +354,7 @@ public class TestCGroupsV2OOMHandler {
   @Test(timeout = 20000)
   public void testAwaitOOMClearsOnADip() throws Exception {
     setHold(60000);
+    stubNoPressure();
     when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_STAT)))
         .thenReturn("anon " + (HIGH + 1) + "\nfile_mapped 0\nkernel 0\n",
             "anon " + (HIGH - 1) + "\nfile_mapped 0\nkernel 0\n");
@@ -281,6 +369,28 @@ public class TestCGroupsV2OOMHandler {
   }
 
   /**
+   * With pressure information on, a held footprint is still pending until
+   * the kernel reports a stall. The wait covers that term too, and since a
+   * node can sit there legitimately it says so once, not on every poll.
+   */
+  @Test(timeout = 20000)
+  public void testAwaitOOMWaitsForPressureToStall() throws Exception {
+    setHold(0);
+    stubFootprint(HIGH + 1);
+    // The probe at construction, then two flat totals, then a stall.
+    when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_PRESSURE)))
+        .thenReturn(pressure(100), pressure(100), pressure(100),
+            pressure(100), pressure(200));
+    CGroupsV2OOMHandler handler = handler(false);
+
+    assertTrue("Killed once the full total grew", handler.awaitOOM());
+    verify(cgroups, times(5))
+        .getCGroupParam(any(), any(), eq(CGROUP_MEMORY_PRESSURE));
+    assertEquals("Past the hold with no stall is said once: "
+        + appender.atLeast(Level.WARN), 1, appender.atLeast(Level.WARN).size());
+  }
+
+  /**
    * The kill loop runs on the waiting check, not on one evaluation. With no
    * container to kill it can only reach its "I am giving up" failure by
    * passing the hold first: a single evaluation would have said pending and
@@ -289,6 +399,7 @@ public class TestCGroupsV2OOMHandler {
   @Test(timeout = 20000)
   public void testRunWaitsForTheVerdict() throws Exception {
     setHold(300);
+    stubNoPressure();
     stubFootprint(HIGH + 1);
     Context context = mock(Context.class);
     when(context.getContainers()).thenReturn(new ConcurrentHashMap<>());
@@ -494,6 +605,7 @@ public class TestCGroupsV2OOMHandler {
    */
   private CGroupsV2OOMHandler killingHandler(Context context, int kills)
       throws Exception {
+    stubNoPressure();
     AtomicInteger remaining = new AtomicInteger(kills);
     return new CGroupsV2OOMHandler(context, false, conf, cgroups) {
       @Override
