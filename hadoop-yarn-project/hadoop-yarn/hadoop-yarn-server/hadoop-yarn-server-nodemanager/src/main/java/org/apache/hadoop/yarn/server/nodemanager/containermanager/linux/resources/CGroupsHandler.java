@@ -125,9 +125,24 @@ public interface CGroupsHandler {
   String CGROUP_CPU_MAX = "max";
   String CGROUP_MEMORY_MAX = "max";
   String CGROUP_MEMORY_LOW = "low";
+  String CGROUP_MEMORY_HIGH = "high";
+  String CGROUP_MEMORY_CURRENT = "current";
+  String CGROUP_MEMORY_SWAP_MAX = "swap.max";
+  String CGROUP_MEMORY_SWAP_CURRENT = "swap.current";
+  String CGROUP_MEMORY_EVENTS = "events";
+  String CGROUP_MEMORY_STAT = "stat";
+  /** The value the v2 limit files read and accept when there is no limit. */
+  String CGROUP_V2_NO_LIMIT = "max";
 
   // present in v1 and v2
   String CGROUP_PROCS_FILE = "cgroup.procs";
+  /**
+   * Kills every process of a cgroup and of its descendants in a single write.
+   * Unlike {@link #CGROUP_PROCS_FILE} it has no controller prefix, so it is
+   * not reachable through {@link #getPathForCGroupParam}, and it only exists
+   * with cgroup v2, since Linux 5.14.
+   */
+  String CGROUP_KILL_FILE = "cgroup.kill";
   String CGROUP_PARAM_CLASSID = "classid";
   String CGROUP_PARAM_WEIGHT = "weight";
 

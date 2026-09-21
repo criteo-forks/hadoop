@@ -23,31 +23,99 @@ import org.slf4j.LoggerFactory;
 import org.apache.hadoop.yarn.conf.YarnConfiguration;
 import org.apache.hadoop.yarn.exceptions.YarnException;
 import org.apache.hadoop.yarn.exceptions.YarnRuntimeException;
+import org.junit.Before;
 import org.junit.Test;
+import org.junit.runner.RunWith;
+import org.junit.runners.Parameterized;
 
 import java.io.File;
 import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
+import java.util.Collection;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
+import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_HIGH;
+import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources.CGroupsHandler.CGROUP_MEMORY_STAT;
 import static org.junit.Assert.assertTrue;
+import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.fail;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.timeout;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
  * Test for elastic non-strict memory controller based on cgroups.
+ *
+ * Every case runs against both cgroup versions. The v1 parametrisation is the
+ * non-regression gate of the v2 work: on the day it ships every node of the
+ * cluster still runs cgroup v1, so these cases have to keep passing
+ * unchanged.
  */
+@RunWith(Parameterized.class)
 public class TestCGroupElasticMemoryController {
   protected static final Logger LOG = LoggerFactory
       .getLogger(TestCGroupElasticMemoryController.class);
+
+  /** The value the mocked handler reports for the root memory.high. */
+  private static final long HIGH_WATERMARK = 8000;
+
+  @Parameterized.Parameters(name = "cgroups v{0}")
+  public static Collection<Object[]> versions() {
+    return Arrays.asList(new Object[][] {{1}, {2}});
+  }
+
+  private final boolean cgroupsV2;
   private YarnConfiguration conf = new YarnConfiguration();
   private File script = new File("target/" +
       TestCGroupElasticMemoryController.class.getName());
+
+  public TestCGroupElasticMemoryController(int version) {
+    this.cgroupsV2 = version == 2;
+  }
+
+  @Before
+  public void setUp() {
+    // The cases below drive the out of memory condition directly, so no
+    // hysteresis, and a margin that fits under the byte sized limits they use.
+    conf.setLong(YarnConfiguration
+        .NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_OOM_HOLD_DURATION_MS, 0);
+    conf.setInt(YarnConfiguration
+        .NM_ELASTIC_MEMORY_CONTROL_CGROUPS_V2_HIGH_MARGIN_MB, 0);
+  }
+
+  /**
+   * A handler of the version under test, reporting the requested out of
+   * memory state of the root YARN cgroup.
+   */
+  private CGroupsHandler mockCGroupsHandler(boolean underOOM)
+      throws ResourceHandlerException {
+    CGroupsHandler cgroups = mock(CGroupsHandler.class);
+    when(cgroups.isCGroupsV2()).thenReturn(cgroupsV2);
+    when(cgroups.getPathForCGroup(any(), any())).thenReturn("");
+    if (cgroupsV2) {
+      when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_STAT)))
+          .thenReturn(memoryStat(
+              underOOM ? HIGH_WATERMARK + 1 : HIGH_WATERMARK - 1));
+      when(cgroups.getCGroupParam(any(), any(), eq(CGROUP_MEMORY_HIGH)))
+          .thenReturn(Long.toString(HIGH_WATERMARK));
+    } else {
+      when(cgroups.getCGroupParam(any(), any(), any()))
+          .thenReturn(underOOM ? "under_oom 1" : "under_oom 0");
+    }
+    return cgroups;
+  }
+
+  private static String memoryStat(long anon) {
+    return "anon " + anon + "\nfile_mapped 0\nkernel 0\nslab 12345\n";
+  }
 
   /**
    * Test that at least one memory type is requested.
@@ -56,7 +124,7 @@ public class TestCGroupElasticMemoryController {
   @Test(expected = YarnException.class)
   public void testConstructorOff()
       throws YarnException {
-    new CGroupElasticMemoryController(
+    CGroupElasticMemoryController.create(
         conf,
         null,
         null,
@@ -67,20 +135,34 @@ public class TestCGroupElasticMemoryController {
   }
 
   /**
+   * Test that the controller matches the version of the handler.
+   * @throws Exception on exception
+   */
+  @Test
+  public void testCreateMatchesTheHandlerVersion() throws Exception {
+    CGroupElasticMemoryController controller =
+        CGroupElasticMemoryController.create(
+            conf, null, mockCGroupsHandler(false), true, false, 10000);
+    assertEquals("The controller has to match the version of the handler",
+        cgroupsV2
+            ? CGroupsV2ElasticMemoryController.class
+            : CGroupsV1ElasticMemoryController.class,
+        controller.getClass());
+  }
+
+  /**
    * Test that the OOM logic is pluggable.
-   * @throws YarnException on exception
+   * @throws Exception on exception
    */
   @Test
   public void testConstructorHandler()
-      throws YarnException {
+      throws Exception {
     conf.setClass(YarnConfiguration.NM_ELASTIC_MEMORY_CONTROL_OOM_HANDLER,
         DummyRunnableWithContext.class, Runnable.class);
-    CGroupsHandler handler = mock(CGroupsHandler.class);
-    when(handler.getPathForCGroup(any(), any())).thenReturn("");
-    new CGroupElasticMemoryController(
+    CGroupElasticMemoryController.create(
         conf,
         null,
-        handler,
+        mockCGroupsHandler(false),
         true,
         false,
         10000
@@ -101,16 +183,13 @@ public class TestCGroupElasticMemoryController {
       assertTrue("Could not set executable",
           script.setExecutable(true));
 
-      CGroupsHandler cgroups = mock(CGroupsHandler.class);
-      when(cgroups.getPathForCGroup(any(), any())).thenReturn("");
-      when(cgroups.getCGroupParam(any(), any(), any()))
-          .thenReturn("under_oom 0");
+      CGroupsHandler cgroups = mockCGroupsHandler(false);
 
       Runnable handler = mock(Runnable.class);
       doNothing().when(handler).run();
 
       CGroupElasticMemoryController controller =
-          new CGroupElasticMemoryController(
+          CGroupElasticMemoryController.create(
               conf,
               null,
               cgroups,
@@ -142,16 +221,13 @@ public class TestCGroupElasticMemoryController {
       assertTrue("Could not set executable",
           script.setExecutable(true));
 
-      CGroupsHandler cgroups = mock(CGroupsHandler.class);
-      when(cgroups.getPathForCGroup(any(), any())).thenReturn("");
-      when(cgroups.getCGroupParam(any(), any(), any()))
-          .thenReturn("under_oom 0");
+      CGroupsHandler cgroups = mockCGroupsHandler(false);
 
       Runnable handler = mock(Runnable.class);
       doNothing().when(handler).run();
 
       CGroupElasticMemoryController controller =
-          new CGroupElasticMemoryController(
+          CGroupElasticMemoryController.create(
               conf,
               null,
               cgroups,
@@ -173,10 +249,12 @@ public class TestCGroupElasticMemoryController {
    * Test the edge case that OOM is never resolved.
    * @throws Exception on exception
    */
-  @Test(timeout = 20000, expected = YarnRuntimeException.class)
+  @Test(timeout = 20000)
   public void testInfiniteOOM() throws Exception {
     conf.set(YarnConfiguration.NM_ELASTIC_MEMORY_CONTROL_OOM_LISTENER_PATH,
         script.getAbsolutePath());
+    conf.setInt(
+        YarnConfiguration.NM_ELASTIC_MEMORY_CONTROL_OOM_TIMEOUT_SEC, 1);
     Runnable handler = mock(Runnable.class);
     try {
       FileUtils.writeStringToFile(script, "#!/bin/bash\nprintf oomevent;sleep 1000;\n",
@@ -184,15 +262,12 @@ public class TestCGroupElasticMemoryController {
       assertTrue("Could not set executable",
           script.setExecutable(true));
 
-      CGroupsHandler cgroups = mock(CGroupsHandler.class);
-      when(cgroups.getPathForCGroup(any(), any())).thenReturn("");
-      when(cgroups.getCGroupParam(any(), any(), any()))
-          .thenReturn("under_oom 1");
+      CGroupsHandler cgroups = mockCGroupsHandler(true);
 
       doNothing().when(handler).run();
 
       CGroupElasticMemoryController controller =
-          new CGroupElasticMemoryController(
+          CGroupElasticMemoryController.create(
               conf,
               null,
               cgroups,
@@ -201,7 +276,7 @@ public class TestCGroupElasticMemoryController {
               10000,
               handler
           );
-      controller.run();
+      runUnresolvedOOM(controller, handler, cgroups);
     } finally {
       verify(handler, times(1)).run();
       assertTrue(String.format("Could not clean up script %s",
@@ -210,14 +285,46 @@ public class TestCGroupElasticMemoryController {
   }
 
   /**
+   * Run a controller whose handler does not resolve the out of memory
+   * condition, and check what each version does about it. On v1 the cgroup
+   * is frozen and nothing else will resolve it, so the controller gives up
+   * after the timeout: it stops the listener and fails. On v2 memory.max is
+   * a kill the kernel performs by itself, so the controller keeps listening
+   * and the root cgroup keeps its limits, until it is stopped.
+   */
+  private void runUnresolvedOOM(CGroupElasticMemoryController controller,
+      Runnable handler, CGroupsHandler cgroups) throws Exception {
+    if (!cgroupsV2) {
+      try {
+        controller.run();
+        fail("A v1 controller has to give up on an unresolved OOM");
+      } catch (YarnRuntimeException expected) {
+        LOG.info("Gave up as expected: {}", expected.getMessage());
+      }
+      return;
+    }
+    controller.start();
+    verify(handler, timeout(10000)).run();
+    // Well past the timeout a v1 controller would have given up at.
+    Thread.sleep(3000);
+    assertTrue("A v2 controller never gives up", controller.isAlive());
+    verify(cgroups, never()).updateCGroupParam(any(), any(),
+        eq(CGROUP_MEMORY_HIGH), eq(CGroupsHandler.CGROUP_V2_NO_LIMIT));
+    controller.stopListening();
+    controller.join();
+  }
+
+  /**
    * Test the edge case that OOM cannot be resolved due to the lack of
    * containers.
    * @throws Exception on exception
    */
-  @Test(timeout = 20000, expected = YarnRuntimeException.class)
+  @Test(timeout = 20000)
   public void testNothingToKill() throws Exception {
     conf.set(YarnConfiguration.NM_ELASTIC_MEMORY_CONTROL_OOM_LISTENER_PATH,
         script.getAbsolutePath());
+    conf.setInt(
+        YarnConfiguration.NM_ELASTIC_MEMORY_CONTROL_OOM_TIMEOUT_SEC, 1);
     Runnable handler = mock(Runnable.class);
     try {
       FileUtils.writeStringToFile(script, "#!/bin/bash\nprintf oomevent;sleep 1000;\n",
@@ -225,15 +332,12 @@ public class TestCGroupElasticMemoryController {
       assertTrue("Could not set executable",
           script.setExecutable(true));
 
-      CGroupsHandler cgroups = mock(CGroupsHandler.class);
-      when(cgroups.getPathForCGroup(any(), any())).thenReturn("");
-      when(cgroups.getCGroupParam(any(), any(), any()))
-          .thenReturn("under_oom 1");
+      CGroupsHandler cgroups = mockCGroupsHandler(true);
 
       doThrow(new YarnRuntimeException("Expected")).when(handler).run();
 
       CGroupElasticMemoryController controller =
-          new CGroupElasticMemoryController(
+          CGroupElasticMemoryController.create(
               conf,
               null,
               cgroups,
@@ -242,7 +346,7 @@ public class TestCGroupElasticMemoryController {
               10000,
               handler
           );
-      controller.run();
+      runUnresolvedOOM(controller, handler, cgroups);
     } finally {
       verify(handler, times(1)).run();
       assertTrue(String.format("Could not clean up script %s",
@@ -263,17 +367,16 @@ public class TestCGroupElasticMemoryController {
         "sleep");
     ExecutorService service = Executors.newFixedThreadPool(1);
     try {
-      CGroupsHandler cgroups = mock(CGroupsHandler.class);
-      // This will be passed to sleep as an argument
+      CGroupsHandler cgroups = mockCGroupsHandler(false);
+      // The version and this will be passed to sleep as arguments, and sleep
+      // sleeps for the sum of its operands.
       when(cgroups.getPathForCGroup(any(), any())).thenReturn("10000");
-      when(cgroups.getCGroupParam(any(), any(), any()))
-          .thenReturn("under_oom 0");
 
       Runnable handler = mock(Runnable.class);
       doNothing().when(handler).run();
 
       CGroupElasticMemoryController controller =
-          new CGroupElasticMemoryController(
+          CGroupElasticMemoryController.create(
               conf,
               null,
               cgroups,
@@ -301,15 +404,19 @@ public class TestCGroupElasticMemoryController {
   }
 
   /**
-   * Test that DefaultOOMHandler is instantiated correctly in
-   * the elastic constructor.
-   * @throws YarnException Could not set up elastic memory control.
+   * Test that the stock OOM handler is instantiated correctly in the elastic
+   * constructor: the stock configuration value names DefaultOOMHandler and
+   * has to select the handler of the version, so that one configuration
+   * serves v1 and v2 nodes at the same time.
+   * @throws Exception Could not set up elastic memory control.
    */
   @Test
-  public void testDefaultConstructor() throws YarnException{
-    CGroupsHandler handler = mock(CGroupsHandler.class);
-    when(handler.getPathForCGroup(any(), any())).thenReturn("");
-    new CGroupElasticMemoryController(
-        conf, null, handler, true, false, 10);
+  public void testDefaultConstructor() throws Exception {
+    CGroupElasticMemoryController controller =
+        CGroupElasticMemoryController.create(
+            conf, null, mockCGroupsHandler(false), true, false, 10);
+    assertEquals("The stock handler has to match the version of the handler",
+        cgroupsV2 ? CGroupsV2OOMHandler.class : DefaultOOMHandler.class,
+        controller.getOOMHandler().getClass());
   }
 }

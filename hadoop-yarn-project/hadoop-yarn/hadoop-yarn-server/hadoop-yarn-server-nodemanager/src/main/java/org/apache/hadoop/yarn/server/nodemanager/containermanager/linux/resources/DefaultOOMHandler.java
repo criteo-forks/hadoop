@@ -42,6 +42,13 @@ import static org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.r
 /**
  * A very basic OOM handler implementation.
  * See the javadoc on the run() method for details.
+ *
+ * This is the handler of cgroup v1, and the stock value of
+ * yarn.nodemanager.elastic-memory-control.oom-handler. On a cgroup v2 node
+ * that value selects {@link CGroupsV2OOMHandler} instead, which overrides
+ * what the cgroup version decides: the out of memory condition, the memory
+ * measure and how a container is killed. The victim policy of
+ * {@link #run()} is common to both.
  */
 @InterfaceAudience.Public
 @InterfaceStability.Evolving
@@ -50,7 +57,7 @@ public class DefaultOOMHandler implements Runnable {
       .getLogger(DefaultOOMHandler.class);
   private final Context context;
   private final String memoryStatFile;
-  private final CGroupsHandler cgroups;
+  protected final CGroupsHandler cgroups;
 
   /**
    * Create an OOM handler.
@@ -67,6 +74,54 @@ public class DefaultOOMHandler implements Runnable {
     this.cgroups = getCGroupsHandler();
   }
 
+  /**
+   * Create an OOM handler on an explicit cgroups handler, for a subclass
+   * that already has one.
+   * @param context node manager context to work with
+   * @param enforceVirtualMemory true if virtual memory needs to be checked,
+   *                   false if physical memory needs to be checked instead
+   * @param cgroupsHandler the cgroups handler to read and write cgroups with
+   */
+  protected DefaultOOMHandler(Context context, boolean enforceVirtualMemory,
+      CGroupsHandler cgroupsHandler) {
+    this.context = context;
+    this.memoryStatFile = enforceVirtualMemory ?
+        CGROUP_PARAM_MEMORY_MEMSW_USAGE_BYTES :
+        CGROUP_PARAM_MEMORY_USAGE_BYTES;
+    this.cgroups = cgroupsHandler;
+  }
+
+  /**
+   * Whether the root YARN cgroup is in the out of memory condition that
+   * justifies killing a container. With cgroup v1 the kernel OOM killer is
+   * disabled on it, so the kernel freezes every container at the limit and
+   * reports under_oom. {@link #run()} loops on this, so an override may
+   * block until the condition is known.
+   * @return true if a container has to be killed
+   * @throws ResourceHandlerException the cgroup file could not be read
+   */
+  protected boolean isUnderOOM() throws ResourceHandlerException {
+    String status = cgroups.getCGroupParam(
+        CGroupsHandler.CGroupController.MEMORY,
+        "",
+        CGROUP_PARAM_MEMORY_OOM_CONTROL);
+    return status.contains(CGroupsHandler.UNDER_OOM);
+  }
+
+  /**
+   * The memory a container uses, in bytes. With cgroup v1 the kernel only
+   * reports the OOM once reclaim has failed, so usage_in_bytes has the
+   * reclaimable page cache dropped from it already.
+   * @param cGroupId the cgroup of the container
+   * @return the memory usage to compare against the request of the container
+   * @throws ResourceHandlerException the cgroup file could not be read
+   */
+  protected long getMemoryUsage(String cGroupId)
+      throws ResourceHandlerException {
+    return Long.parseLong(cgroups.getCGroupParam(
+        CGroupsHandler.CGroupController.MEMORY, cGroupId, memoryStatFile));
+  }
+
   @VisibleForTesting
   protected CGroupsHandler getCGroupsHandler() {
     return ResourceHandlerModule.getCGroupsHandler();
@@ -78,11 +133,8 @@ public class DefaultOOMHandler implements Runnable {
   private boolean isContainerOutOfLimit(Container container) {
     boolean outOfLimit = false;
 
-    String value = null;
     try {
-      value = cgroups.getCGroupParam(CGroupsHandler.CGroupController.MEMORY,
-          container.getContainerId().toString(), memoryStatFile);
-      long usage = Long.parseLong(value);
+      long usage = getMemoryUsage(container.getContainerId().toString());
       long request = container.getResource().getMemorySize() * 1024 * 1024;
 
       // Check if the container has exceeded its limits.
@@ -98,7 +150,7 @@ public class DefaultOOMHandler implements Runnable {
       LOG.warn(String.format("Could not access memory resource for %s",
           container.getContainerId()), ex);
     } catch (NumberFormatException ex) {
-      LOG.warn(String.format("Could not parse %s in %s", value,
+      LOG.warn(String.format("Could not parse the memory usage of %s",
           container.getContainerId()));
     }
     return outOfLimit;
@@ -118,7 +170,7 @@ public class DefaultOOMHandler implements Runnable {
    * @param container Container to clean up
    * @return true if the container is killed successfully, false otherwise
    */
-  private boolean sigKill(Container container) {
+  protected boolean sigKill(Container container) {
     boolean containerKilled = false;
     boolean finished = false;
     try {
@@ -185,11 +237,7 @@ public class DefaultOOMHandler implements Runnable {
       // We kill containers until the kernel reports the OOM situation resolved
       // Note: If the kernel has a delay this may kill more than necessary
       while (true) {
-        String status = cgroups.getCGroupParam(
-            CGroupsHandler.CGroupController.MEMORY,
-            "",
-            CGROUP_PARAM_MEMORY_OOM_CONTROL);
-        if (!status.contains(CGroupsHandler.UNDER_OOM)) {
+        if (!isUnderOOM()) {
           break;
         }
 
