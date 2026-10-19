@@ -44,7 +44,8 @@ import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
- * Test default out of memory handler.
+ * Test the default, cgroup v1, out of memory handler, and with it the victim
+ * policy of {@link DefaultOOMHandler} that both versions share.
  */
 public class TestDefaultOOMHandler {
 
@@ -1225,7 +1226,7 @@ public class TestDefaultOOMHandler {
     handler.run();
   }
 
-  private static ContainerId createContainerId(int id) {
+  static ContainerId createContainerId(int id) {
     ApplicationId applicationId = ApplicationId.newInstance(1, 1);
 
     ApplicationAttemptId applicationAttemptId
@@ -1240,7 +1241,7 @@ public class TestDefaultOOMHandler {
     return containerId;
   }
 
-  private static Container createContainer(int containerId,
+  static Container createContainer(int containerId,
       boolean guaranteed, long launchTime, boolean running) {
     Container c1 = mock(Container.class);
     ContainerId cid1 = createContainerId(containerId);
@@ -1263,7 +1264,7 @@ public class TestDefaultOOMHandler {
     return Long.toString(mb * 1024 * 1024);
   }
 
-  private static ContainerExecutor createContainerExecutor(
+  static ContainerExecutor createContainerExecutor(
       ConcurrentHashMap<ContainerId, Container> containers)
       throws IOException {
     ContainerExecutor ex = mock(ContainerExecutor.class);

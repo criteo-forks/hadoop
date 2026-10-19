@@ -105,7 +105,6 @@ public class NodeManagerMetrics {
   @Metric("Orphaned application directories whose ownership could not be"
       + " restored, so they could not be deleted")
   MutableCounterLong orphanedAppDirsReownFailures;
-
   @Metric("Missed localization requests in bytes")
       MutableCounterLong localizedCacheMissBytes;
   @Metric("Cached localization requests in bytes")

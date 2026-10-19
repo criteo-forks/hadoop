@@ -36,45 +36,76 @@ import java.util.Set;
 public interface CGroupsHandler {
 
   /**
-   * List of supported cgroup subsystem types.
+   * List of supported cgroup controller types. The two boolean variables denote whether
+   * the controller is valid in v1, v2 or both.
    */
   enum CGroupController {
-    CPU("cpu"),
-    NET_CLS("net_cls"),
-    BLKIO("blkio"),
-    MEMORY("memory"),
-    CPUACCT("cpuacct"),
-    CPUSET("cpuset"),
-    FREEZER("freezer"),
-    DEVICES("devices");
+    NET_CLS("net_cls", true, false),
+    BLKIO("blkio", true, false),
+    CPUACCT("cpuacct", true, false),
+    FREEZER("freezer", true, false),
+    DEVICES("devices", true, false),
+
+    // v2 specific
+    IO("io", false, true),
+
+    // present in v1 and v2
+    CPU("cpu", true, true),
+    CPUSET("cpuset", true, true),
+    MEMORY("memory", true, true);
 
     private final String name;
+    private final boolean inV1;
+    private final boolean inV2;
 
-    CGroupController(String name) {
+    CGroupController(String name, boolean inV1, boolean inV2) {
       this.name = name;
+      this.inV1 = inV1;
+      this.inV2 = inV2;
     }
 
     public String getName() {
       return name;
     }
 
+    public boolean isInV1() {
+      return inV1;
+    }
+
+    public boolean isInV2() {
+      return inV2;
+    }
+
     /**
-     * Get the list of valid cgroup names.
-     * @return The set of cgroup name strings
+     * Returns a set of valid cgroup controller names for v1.
+     * @return a set of valid cgroup controller names for v1.
      */
-    public static Set<String> getValidCGroups() {
+    public static Set<String> getValidV1CGroups() {
       HashSet<String> validCgroups = new HashSet<>();
       for (CGroupController controller : CGroupController.values()) {
-        validCgroups.add(controller.getName());
+        if (controller.isInV1()) {
+          validCgroups.add(controller.getName());
+        }
+      }
+      return validCgroups;
+    }
+
+    /**
+     * Returns a set of valid cgroup controller names for v2.
+     * @return a set of valid cgroup controller names for v2.
+     */
+    public static Set<String> getValidV2CGroups() {
+      HashSet<String> validCgroups = new HashSet<>();
+      for (CGroupController controller : CGroupController.values()) {
+        if (controller.isInV2()) {
+          validCgroups.add(controller.getName());
+        }
       }
       return validCgroups;
     }
   }
 
-  String CGROUP_PROCS_FILE = "cgroup.procs";
-  String CGROUP_PARAM_CLASSID = "classid";
-  String CGROUP_PARAM_BLKIO_WEIGHT = "weight";
-
+  // v1 specific params
   String CGROUP_PARAM_MEMORY_HARD_LIMIT_BYTES = "limit_in_bytes";
   String CGROUP_PARAM_MEMORY_SWAP_HARD_LIMIT_BYTES = "memsw.limit_in_bytes";
   String CGROUP_PARAM_MEMORY_SOFT_LIMIT_BYTES = "soft_limit_in_bytes";
@@ -84,11 +115,37 @@ public interface CGroupsHandler {
   String CGROUP_PARAM_MEMORY_MEMSW_USAGE_BYTES = "memsw.usage_in_bytes";
   String CGROUP_NO_LIMIT = "-1";
   String UNDER_OOM = "under_oom 1";
-
-
   String CGROUP_CPU_PERIOD_US = "cfs_period_us";
   String CGROUP_CPU_QUOTA_US = "cfs_quota_us";
   String CGROUP_CPU_SHARES = "shares";
+
+  // v2 specific params
+  String CGROUP_CONTROLLERS_FILE = "cgroup.controllers";
+  String CGROUP_SUBTREE_CONTROL_FILE = "cgroup.subtree_control";
+  String CGROUP_CPU_MAX = "max";
+  String CGROUP_MEMORY_MAX = "max";
+  String CGROUP_MEMORY_LOW = "low";
+  String CGROUP_MEMORY_HIGH = "high";
+  String CGROUP_MEMORY_CURRENT = "current";
+  String CGROUP_MEMORY_SWAP_MAX = "swap.max";
+  String CGROUP_MEMORY_SWAP_CURRENT = "swap.current";
+  String CGROUP_MEMORY_EVENTS = "events";
+  String CGROUP_MEMORY_STAT = "stat";
+  String CGROUP_MEMORY_PRESSURE = "pressure";
+  /** The value the v2 limit files read and accept when there is no limit. */
+  String CGROUP_V2_NO_LIMIT = "max";
+
+  // present in v1 and v2
+  String CGROUP_PROCS_FILE = "cgroup.procs";
+  /**
+   * Kills every process of a cgroup and of its descendants in a single write.
+   * Unlike {@link #CGROUP_PROCS_FILE} it has no controller prefix, so it is
+   * not reachable through {@link #getPathForCGroupParam}, and it only exists
+   * with cgroup v2, since Linux 5.14.
+   */
+  String CGROUP_KILL_FILE = "cgroup.kill";
+  String CGROUP_PARAM_CLASSID = "classid";
+  String CGROUP_PARAM_WEIGHT = "weight";
 
   /**
    * Mounts or initializes a cgroup controller.
@@ -124,6 +181,12 @@ public interface CGroupsHandler {
    * @return the root of the controller.
    */
   String getControllerPath(CGroupController controller);
+
+  /**
+   * Gets the valid cgroup controller names based on the version used.
+   * @return a set containing the valid controller names for the used cgroup version.
+   */
+  Set<String> getValidCGroups();
 
   /**
    * Gets the relative path for the cgroup, independent of a controller, for a
@@ -192,4 +255,16 @@ public interface CGroupsHandler {
    * @return parameter value as read from the parameter file
    */
   String getCGroupMountPath();
+
+  /**
+   * Returns CGroupV2 Mount Path.
+   * @return parameter value as read from the parameter file
+   */
+  String getCGroupV2MountPath();
+
+  /**
+   * Tells the cgroup version this handler talks to.
+   * @return true for a cgroup v2 handler, false for a cgroup v1 handler
+   */
+  boolean isCGroupsV2();
 }

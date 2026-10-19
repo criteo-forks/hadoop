@@ -220,7 +220,7 @@ public class ContainersMonitorImpl extends AbstractService implements
             "CGroup Elastic Memory controller enabled but " +
             "it is not available. Exiting.");
       } else {
-        this.oomListenerThread = new CGroupElasticMemoryController(
+        this.oomListenerThread = CGroupElasticMemoryController.create(
             conf,
             context,
             ResourceHandlerModule.getCGroupsHandler(),
@@ -295,7 +295,7 @@ public class ContainersMonitorImpl extends AbstractService implements
           + "{} is disabled.", this.getClass().getName());
       return false;
     }
-    if (getResourceCalculatorProcessTree("0") == null) {
+    if (getResourceCalculatorProcessTree("1") == null) {
       LOG.info("ResourceCalculatorProcessTree is unavailable on this system. "
           + "{} is disabled.", this.getClass().getName());
       return false;
@@ -603,6 +603,9 @@ public class ContainersMonitorImpl extends AbstractService implements
           nmMetrics.setContainerCpuUtilization(
               trackedContainersUtilization.getCPU());
           nmMetrics.addContainerMonitorCostTime(duration);
+        }
+        if (oomListenerThread != null) {
+          oomListenerThread.sample();
         }
 
         try {

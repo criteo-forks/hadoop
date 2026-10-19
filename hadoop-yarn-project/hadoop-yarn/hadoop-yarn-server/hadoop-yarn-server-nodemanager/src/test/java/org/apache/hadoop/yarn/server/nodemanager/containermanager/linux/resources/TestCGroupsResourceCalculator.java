@@ -18,364 +18,202 @@
 
 package org.apache.hadoop.yarn.server.nodemanager.containermanager.linux.resources;
 
-import org.apache.commons.io.FileUtils;
-import org.apache.hadoop.yarn.exceptions.YarnException;
-import org.apache.hadoop.yarn.util.ControlledClock;
-import org.apache.hadoop.yarn.util.ResourceCalculatorProcessTree;
-import org.junit.Assert;
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.util.Arrays;
+import java.util.stream.Collectors;
+
+import org.junit.After;
+import org.junit.Before;
 import org.junit.Test;
 
-import java.io.File;
-import java.nio.charset.StandardCharsets;
+import org.apache.commons.io.FileUtils;
+import org.apache.hadoop.util.CpuTimeTracker;
 
-import static org.mockito.Mockito.*;
+import static org.junit.Assert.assertEquals;
+import static org.mockito.Mockito.any;
+import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.when;
 
 /**
  * Unit test for CGroupsResourceCalculator.
  */
 public class TestCGroupsResourceCalculator {
 
-  private ControlledClock clock = new ControlledClock();
-  private CGroupsHandler cGroupsHandler = mock(CGroupsHandler.class);
-  private String basePath = "/tmp/" + this.getClass().getName();
+  private Path root;
 
-  public TestCGroupsResourceCalculator() {
-    when(cGroupsHandler.getRelativePathForCGroup("container_1"))
-        .thenReturn("/yarn/container_1");
-    when(cGroupsHandler.getRelativePathForCGroup("")).thenReturn("/yarn/");
+  @Before
+  public void before() throws IOException {
+    root = Files.createTempDirectory("TestCGroupsResourceCalculator");
   }
 
-  @Test(expected = YarnException.class)
-  public void testPidNotFound() throws Exception {
-    CGroupsResourceCalculator calculator =
-        new CGroupsResourceCalculator(
-            "1234", ".", cGroupsHandler, clock, 10);
-    calculator.setCGroupFilePaths();
-    Assert.assertEquals("Expected exception", null, calculator);
+  @After
+  public void after() throws IOException {
+    FileUtils.deleteDirectory(root.toFile());
   }
 
-  @Test(expected = YarnException.class)
+  @Test
   public void testNoMemoryCGgroupMount() throws Exception {
-    File procfs = new File(basePath + "/1234");
-    Assert.assertTrue("Setup error", procfs.mkdirs());
-    try {
-      FileUtils.writeStringToFile(
-          new File(procfs, CGroupsResourceCalculator.CGROUP),
-          "7:devices:/yarn/container_1\n" +
-              "6:cpuacct,cpu:/yarn/container_1\n" +
-              "5:pids:/yarn/container_1\n", StandardCharsets.UTF_8);
-      CGroupsResourceCalculator calculator =
-          new CGroupsResourceCalculator(
-              "1234", basePath,
-              cGroupsHandler, clock, 10);
-      calculator.setCGroupFilePaths();
-      Assert.assertEquals("Expected exception", null, calculator);
-    } finally {
-      FileUtils.deleteDirectory(new File(basePath));
-    }
+    writeToFile("proc/41/cgroup",
+        "7:devices:/yarn/container_1",
+        "6:cpuacct,cpu:/yarn/container_1",
+        "5:pids:/yarn/container_1"
+    );
+
+    CGroupsResourceCalculator calculator = createCalculator();
+    calculator.updateProcessTree();
+    assertEquals(-1, calculator.getVirtualMemorySize());
   }
 
   @Test
   public void testCGgroupNotFound() throws Exception {
-    File procfs = new File(basePath + "/1234");
-    Assert.assertTrue("Setup error", procfs.mkdirs());
-    try {
-      FileUtils.writeStringToFile(
-          new File(procfs, CGroupsResourceCalculator.CGROUP),
-          "7:devices:/yarn/container_1\n" +
-              "6:cpuacct,cpu:/yarn/container_1\n" +
-              "5:pids:/yarn/container_1\n" +
-              "4:memory:/yarn/container_1\n", StandardCharsets.UTF_8);
+    writeToFile("proc/41/cgroup",
+        "7:devices:/yarn/container_1",
+        "6:cpuacct,cpu:/yarn/container_1",
+        "5:pids:/yarn/container_1",
+        "4:memory:/yarn/container_1"
+    );
 
-      CGroupsResourceCalculator calculator =
-          new CGroupsResourceCalculator(
-              "1234", basePath,
-              cGroupsHandler, clock, 10);
-      calculator.setCGroupFilePaths();
-      calculator.updateProcessTree();
-      Assert.assertEquals("cgroups should be missing",
-          (long)ResourceCalculatorProcessTree.UNAVAILABLE,
-          calculator.getRssMemorySize(0));
-    } finally {
-      FileUtils.deleteDirectory(new File(basePath));
-    }
-  }
-  
-  @Test
-  public void testCgroupWithDocker() throws Exception {
-    File procfs = new File(basePath + "/1234");
-    Assert.assertTrue("Setup error", procfs.mkdirs());
-    try {
-      FileUtils.writeStringToFile(
-          new File(procfs, CGroupsResourceCalculator.CGROUP),
-          "7:devices:/yarn/container_1/de5b77f2cdf6b5e87de9c23da5bc07de0d69f010af503dcd15832a3389c31565\n" +
-              "6:cpuacct,cpu:/yarn/container_1/de5b77f2cdf6b5e87de9c23da5bc07de0d69f010af503dcd15832a3389c31565\n" +
-              "5:pids:/yarn/container_1/de5b77f2cdf6b5e87de9c23da5bc07de0d69f010af503dcd15832a3389c31565\n" +
-              "4:memory:/yarn/container_1/de5b77f2cdf6b5e87de9c23da5bc07de0d69f010af503dcd15832a3389c31565\n", StandardCharsets.UTF_8);
-    
-      CGroupsResourceCalculator calculator =
-          new CGroupsResourceCalculator(
-              "1234", basePath,
-              cGroupsHandler, clock, 10);
-      calculator.setCGroupFilePaths();
-      Assert.assertEquals("cpuStat should be an existing path",
-          "/yarn/container_1/cpuacct.stat",
-          calculator.getCpuStat().toString());
-      Assert.assertEquals("memStat should be an existing path",
-          "/yarn/container_1/memory.stat",
-          calculator.getMemStat().toString());
-      Assert.assertEquals("kmemStat should be an existing path",
-          "/yarn/container_1/memory.kmem.usage_in_bytes",
-          calculator.getKmemStat().toString());
-      Assert.assertEquals("memswStat should be an existing path",
-          "/yarn/container_1/memory.memsw.usage_in_bytes",
-          calculator.getMemswStat().toString());
-    } finally {
-      FileUtils.deleteDirectory(new File(basePath));
-    }
-  }
-  
-  @Test
-  public void testCgroupPid0() throws Exception {
-    File procfs = new File(basePath + "/1"); //Pid 0 in constructor is changed to pid 1 to fetch real /proc/1/cgroup file
-    Assert.assertTrue("Setup error", procfs.mkdirs());
-    try {
-      FileUtils.writeStringToFile(
-          new File(procfs, CGroupsResourceCalculator.CGROUP),
-          "7:devices:/\n" +
-              "6:cpuacct,cpu:/\n" +
-              "5:pids:/\n" +
-              "4:memory:/\n", StandardCharsets.UTF_8);
-      
-      CGroupsResourceCalculator calculator =
-          new CGroupsResourceCalculator(
-              "0", basePath,
-              cGroupsHandler, clock, 10);
-      calculator.setCGroupFilePaths();
-      Assert.assertEquals("cpuStat should be an existing path",
-          "/cpuacct.stat",
-          calculator.getCpuStat().toString());
-      Assert.assertEquals("memStat should be an existing path",
-          "/memory.stat",
-          calculator.getMemStat().toString());
-      Assert.assertEquals("kmemStat should be an existing path",
-          "/memory.kmem.usage_in_bytes",
-          calculator.getKmemStat().toString());
-      Assert.assertEquals("memswStat should be an existing path",
-          "/memory.memsw.usage_in_bytes",
-          calculator.getMemswStat().toString());
-    } finally {
-      FileUtils.deleteDirectory(new File(basePath));
-    }
+    CGroupsResourceCalculator calculator = createCalculator();
+    calculator.updateProcessTree();
+    assertEquals(-1, calculator.getCumulativeCpuTime());
   }
 
   @Test
-  public void testCPUParsing() throws Exception {
-    File cgcpuacctDir =
-        new File(basePath + "/cgcpuacct");
-    File cgcpuacctContainerDir =
-        new File(cgcpuacctDir, "/yarn/container_1");
-    File procfs = new File(basePath + "/1234");
-    when(cGroupsHandler.getControllerPath(
-        CGroupsHandler.CGroupController.CPUACCT)).
-        thenReturn(cgcpuacctDir.getAbsolutePath());
-    Assert.assertTrue("Setup error", procfs.mkdirs());
-    Assert.assertTrue("Setup error", cgcpuacctContainerDir.mkdirs());
-    try {
-      FileUtils.writeStringToFile(
-          new File(procfs, CGroupsResourceCalculator.CGROUP),
-          "7:devices:/yarn/container_1\n" +
-              "6:cpuacct,cpu:/yarn/container_1\n" +
-              "5:pids:/yarn/container_1\n" +
-              "4:memory:/yarn/container_1\n", StandardCharsets.UTF_8);
-      FileUtils.writeStringToFile(
-          new File(cgcpuacctContainerDir, CGroupsResourceCalculator.CPU_STAT),
-          "Can you handle this?\n" +
-              "user 5415\n" +
-              "system 3632", StandardCharsets.UTF_8);
-      CGroupsResourceCalculator calculator =
-          new CGroupsResourceCalculator(
-              "1234", basePath,
-              cGroupsHandler, clock, 10);
-      calculator.setCGroupFilePaths();
-      calculator.updateProcessTree();
-      Assert.assertEquals("Incorrect CPU usage",
-          90470,
-          calculator.getCumulativeCpuTime());
-    } finally {
-      FileUtils.deleteDirectory(new File(basePath));
-    }
+  public void testParsing() throws Exception {
+    writeToFile("proc/41/cgroup",
+        "7:devices:/yarn/container_1",
+        "6:cpuacct,cpu:/yarn/container_1",
+        "5:pids:/yarn/container_1",
+        "4:memory:/yarn/container_1"
+    );
+
+    writeToFile("mount/cgroup/yarn/container_1/cpuacct.stat",
+        "Can you handle this?",
+        "user 5415",
+        "system 3632"
+    );
+
+    CGroupsResourceCalculator calculator = createCalculator();
+    calculator.updateProcessTree();
+    assertEquals(90470, calculator.getCumulativeCpuTime());
+
+    // Only a few lines of memory.stat are written, the decoys are there to
+    // check that the non hierarchical counters are skipped: the expected
+    // value must come from total_rss and total_mapped_file only.
+    writeToFile("mount/cgroup/yarn/container_1/memory.stat",
+        "cache 1000000",
+        "rss 2000000",
+        "rss_huge 0",
+        "shmem 172032",
+        "mapped_file 100000",
+        "total_cache 10000000",
+        "total_rss 20000000",
+        "total_rss_huge 4469030912",
+        "total_shmem 2412544",
+        "total_mapped_file 200000",
+        "total_dirty 1060474880"
+    );
+    writeToFile("mount/cgroup/yarn/container_1/memory.kmem.usage_in_bytes",
+        "10000"
+    );
+
+    calculator.updateProcessTree();
+    // total_rss + total_mapped_file + kernel memory
+    assertEquals(20210000, calculator.getRssMemorySize());
+    assertEquals(-1, calculator.getVirtualMemorySize());
+
+    writeToFile("mount/cgroup/yarn/container_1/memory.memsw.usage_in_bytes",
+        "418496513"
+    );
+
+    calculator.updateProcessTree();
+    assertEquals(20210000, calculator.getRssMemorySize());
+    assertEquals(418496513, calculator.getVirtualMemorySize());
   }
 
+  /**
+   * With docker /proc/&lt;pid&gt;/cgroup points at the cgroup the docker daemon
+   * created below the YARN container one. The statistics have to be read at
+   * the container_x level, which is the hierarchical parent of it.
+   */
   @Test
-  public void testMemoryParsing() throws Exception {
-    File cgcpuacctDir =
-        new File(basePath + "/cgcpuacct");
-    File cgcpuacctContainerDir =
-        new File(cgcpuacctDir, "/yarn/container_1");
-    File cgmemoryDir =
-        new File(basePath + "/memory");
-    File cgMemoryContainerDir =
-        new File(cgmemoryDir, "/yarn/container_1");
-    File procfs = new File(basePath + "/1234");
-    when(cGroupsHandler.getControllerPath(
-        CGroupsHandler.CGroupController.MEMORY)).
-        thenReturn(cgmemoryDir.getAbsolutePath());
-    Assert.assertTrue("Setup error", procfs.mkdirs());
-    Assert.assertTrue("Setup error", cgcpuacctContainerDir.mkdirs());
-    Assert.assertTrue("Setup error", cgMemoryContainerDir.mkdirs());
-    try {
-      FileUtils.writeStringToFile(
-          new File(procfs, CGroupsResourceCalculator.CGROUP),
-              "6:cpuacct,cpu:/yarn/container_1\n" +
-              "4:memory:/yarn/container_1\n", StandardCharsets.UTF_8);
-      //we don't write all lines of memory.stat,
-      //just add few ones to be sure they are correctly skipped
-      //we also want to make sure total_* is read, thus print non suffixe one
-      //and make sure the total does not originate from them
-      //in the end only total_rss and total_mapped_file should be used
-      FileUtils.writeStringToFile(
-          new File(cgMemoryContainerDir, CGroupsResourceCalculator.MEM_STAT),
-          "cache 1000000\n" +
-                "rss 2000000\n" +
-                "rss_huge 0\n" +
-                "shmem 172032\n" +
-                "mapped_file 100000\n" +
-                "total_cache 10000000\n" +
-                "total_rss 20000000\n" +
-                "total_rss_huge 4469030912\n" +
-                "total_shmem 2412544\n" +
-                "total_mapped_file 200000\n" +
-                "total_dirty 1060474880\n", StandardCharsets.UTF_8);
-      //some memory to be accounted also comes from kernel memory
-      FileUtils.writeStringToFile(
-              new File(cgMemoryContainerDir, CGroupsResourceCalculator.KMEM_STAT),
-                "10000\n", StandardCharsets.UTF_8);
+  public void testParsingWithDocker() throws Exception {
+    String dockerId =
+        "/de5b77f2cdf6b5e87de9c23da5bc07de0d69f010af503dcd15832a3389c31565";
+    writeToFile("proc/41/cgroup",
+        "7:devices:/yarn/container_1" + dockerId,
+        "6:cpuacct,cpu:/yarn/container_1" + dockerId,
+        "5:pids:/yarn/container_1" + dockerId,
+        "4:memory:/yarn/container_1" + dockerId
+    );
 
-      CGroupsResourceCalculator calculator =
-          new CGroupsResourceCalculator(
-              "1234", basePath,
-              cGroupsHandler, clock, 10);
-      calculator.setCGroupFilePaths();
+    writeToFile("mount/cgroup/yarn/container_1/cpuacct.stat",
+        "user 5415",
+        "system 3632"
+    );
+    writeToFile("mount/cgroup/yarn/container_1/memory.stat",
+        "total_rss 20000000",
+        "total_mapped_file 200000"
+    );
+    writeToFile("mount/cgroup/yarn/container_1/memory.kmem.usage_in_bytes",
+        "10000"
+    );
 
-      calculator.updateProcessTree();
-      // Test the case where memsw is not available (Ubuntu)
-      Assert.assertEquals("Incorrect memory usage",
-          20210000,
-          calculator.getRssMemorySize());
-      Assert.assertEquals("Incorrect swap usage",
-          (long)ResourceCalculatorProcessTree.UNAVAILABLE,
-          calculator.getVirtualMemorySize());
-
-      // Test the case where memsw is available
-      FileUtils.writeStringToFile(
-          new File(cgMemoryContainerDir, CGroupsResourceCalculator.MEMSW_STAT),
-          "418496513\n", StandardCharsets.UTF_8);
-      calculator.updateProcessTree();
-      Assert.assertEquals("Incorrect swap usage",
-          418496513,
-          calculator.getVirtualMemorySize());
-    } finally {
-      FileUtils.deleteDirectory(new File(basePath));
-    }
+    CGroupsResourceCalculator calculator = createCalculator();
+    calculator.updateProcessTree();
+    assertEquals(90470, calculator.getCumulativeCpuTime());
+    assertEquals(20210000, calculator.getRssMemorySize());
   }
 
+  /**
+   * Pid 1 is the availability probe of ContainersMonitorImpl, not a
+   * container: the yarn hierarchy root is read instead.
+   */
   @Test
-  public void testCPUParsingRoot() throws Exception {
-    File cgcpuacctDir =
-        new File(basePath + "/cgcpuacct");
-    File cgcpuacctRootDir =
-        new File(cgcpuacctDir, "/yarn");
-    when(cGroupsHandler.getControllerPath(
-        CGroupsHandler.CGroupController.CPUACCT)).
-        thenReturn(cgcpuacctDir.getAbsolutePath());
-    Assert.assertTrue("Setup error", cgcpuacctRootDir.mkdirs());
-    try {
-      FileUtils.writeStringToFile(
-          new File(cgcpuacctRootDir, CGroupsResourceCalculator.CPU_STAT),
-              "user 5415\n" +
-              "system 3632", StandardCharsets.UTF_8);
-      CGroupsResourceCalculator calculator =
-          new CGroupsResourceCalculator(
-              null, basePath,
-              cGroupsHandler, clock, 10);
-      calculator.setCGroupFilePaths();
-      calculator.updateProcessTree();
-      Assert.assertEquals("Incorrect CPU usage",
-          90470,
-          calculator.getCumulativeCpuTime());
-    } finally {
-      FileUtils.deleteDirectory(new File(basePath));
-    }
+  public void testParsingYarnHierarchyRoot() throws Exception {
+    writeToFile("proc/1/cgroup",
+        "7:devices:/",
+        "6:cpuacct,cpu:/",
+        "5:pids:/",
+        "4:memory:/"
+    );
+
+    writeToFile("mount/cgroup/yarn/cpuacct.stat",
+        "user 5415",
+        "system 3632"
+    );
+
+    CGroupsResourceCalculator calculator = createCalculator("1");
+    calculator.updateProcessTree();
+    assertEquals(90470, calculator.getCumulativeCpuTime());
   }
 
-  @Test
-  public void testMemoryParsingRoot() throws Exception {
-    File cgcpuacctDir =
-        new File(basePath + "/cgcpuacct");
-    File cgcpuacctRootDir =
-        new File(cgcpuacctDir, "/yarn");
-    File cgmemoryDir =
-        new File(basePath + "/memory");
-    File cgMemoryRootDir =
-        new File(cgmemoryDir, "/yarn");
-    File procfs = new File(basePath + "/1234");
-    when(cGroupsHandler.getControllerPath(
-        CGroupsHandler.CGroupController.MEMORY)).
-        thenReturn(cgmemoryDir.getAbsolutePath());
-    Assert.assertTrue("Setup error", procfs.mkdirs());
-    Assert.assertTrue("Setup error", cgcpuacctRootDir.mkdirs());
-    Assert.assertTrue("Setup error", cgMemoryRootDir.mkdirs());
-    try {
-      //we don't write all lines of memory.stat,
-      //just add few ones to be sure they are correctly skipped
-      //we also want to make sure total_* is read, thus print non suffixe one
-      //and make sure the total does not originate from them
-      //in the end only total_rss and total_mapped_file should be used
-      FileUtils.writeStringToFile(
-              new File(cgMemoryRootDir, CGroupsResourceCalculator.MEM_STAT),
-              "cache 1000000\n" +
-                      "rss 2000000\n" +
-                      "rss_huge 0\n" +
-                      "shmem 172032\n" +
-                      "mapped_file 100000\n" +
-                      "total_cache 10000000\n" +
-                      "total_rss 20000000\n" +
-                      "total_rss_huge 4469030912\n" +
-                      "total_shmem 2412544\n" +
-                      "total_mapped_file 200000\n" +
-                      "total_dirty 1060474880\n", StandardCharsets.UTF_8);
-      //some memory to be accounted also comes from kernel memory
-      FileUtils.writeStringToFile(
-              new File(cgMemoryRootDir, CGroupsResourceCalculator.KMEM_STAT),
-              "10000\n", StandardCharsets.UTF_8);
+  private CGroupsResourceCalculator createCalculator() {
+    return createCalculator("41");
+  }
 
-      CGroupsResourceCalculator calculator =
-          new CGroupsResourceCalculator(
-              null, basePath,
-              cGroupsHandler, clock, 10);
-      calculator.setCGroupFilePaths();
+  private CGroupsResourceCalculator createCalculator(String pid) {
+    CGroupsResourceCalculator calculator = new CGroupsResourceCalculator(pid);
+    calculator.setCpuTimeTracker(mock(CpuTimeTracker.class));
+    calculator.setcGroupsHandler(mock(CGroupsHandler.class));
+    when(calculator.getcGroupsHandler().getRelativePathForCGroup("container_1"))
+        .thenReturn("/yarn/container_1");
+    when(calculator.getcGroupsHandler().getRelativePathForCGroup(""))
+        .thenReturn("/yarn/");
+    when(calculator.getcGroupsHandler().getControllerPath(any()))
+        .thenReturn(root.resolve("mount/cgroup").toString());
+    calculator.setProcFs(root.toString() + "/proc/");
+    calculator.setJiffyLengthMs(10);
+    return calculator;
+  }
 
-      calculator.updateProcessTree();
-
-      // Test the case where memsw is not available (Ubuntu)
-      Assert.assertEquals("Incorrect memory usage",
-              20210000,
-          calculator.getRssMemorySize());
-      Assert.assertEquals("Incorrect swap usage",
-          (long)ResourceCalculatorProcessTree.UNAVAILABLE,
-          calculator.getVirtualMemorySize());
-
-      // Test the case where memsw is available
-      FileUtils.writeStringToFile(
-          new File(cgMemoryRootDir, CGroupsResourceCalculator.MEMSW_STAT),
-          "418496513\n", StandardCharsets.UTF_8);
-      calculator.updateProcessTree();
-      Assert.assertEquals("Incorrect swap usage",
-          418496513,
-          calculator.getVirtualMemorySize());
-    } finally {
-      FileUtils.deleteDirectory(new File(basePath));
-    }
+  private void writeToFile(String path, String... lines) throws IOException {
+    FileUtils.writeStringToFile(
+        root.resolve(path).toFile(),
+        Arrays.stream(lines).collect(Collectors.joining(System.lineSeparator())),
+        StandardCharsets.UTF_8);
   }
 }
