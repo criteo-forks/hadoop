@@ -714,6 +714,7 @@
             <executions>
               <execution>
                 <id>enforce-os</id>
+                <phase>none</phase>
                 <goals>
                   <goal>enforce</goal>
                 </goals>
@@ -822,6 +823,7 @@
             <executions>
               <execution>
                 <id>enforce-os</id>
+                <phase>none</phase>
                 <goals>
                   <goal>enforce</goal>
                 </goals>

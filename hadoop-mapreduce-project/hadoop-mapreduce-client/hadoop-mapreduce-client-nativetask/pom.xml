@@ -134,6 +134,7 @@
             <executions>
               <execution>
                 <id>enforce-os</id>
+                <phase>none</phase>
                 <goals>
                   <goal>enforce</goal>
                 </goals>
