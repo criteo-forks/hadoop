@@ -39,6 +39,8 @@ import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_LOCK_SUPPRESS_WARNING_INT
 import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_LOCK_SUPPRESS_WARNING_INTERVAL_KEY;
 import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_FSLOCK_FAIR_DEFAULT;
 import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_FSLOCK_FAIR_KEY;
+import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_SNAPSHOT_DIFF_LINEAR_COMBINE_KEY;
+import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_SNAPSHOT_DIFF_LINEAR_COMBINE_DEFAULT;
 import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_LOCK_DETAILED_METRICS_DEFAULT;
 import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_LOCK_DETAILED_METRICS_KEY;
 import static org.apache.hadoop.hdfs.DFSConfigKeys.DFS_NAMENODE_READ_LOCK_REPORTING_THRESHOLD_MS_DEFAULT;
@@ -141,6 +143,13 @@ class FSNamesystemLock {
     FSNamesystem.LOG.info("fsLock is fair: " + fair);
     this.coarseLock = new ReentrantReadWriteLock(fair);
     this.timer = timer;
+
+    // Set the static linear combine flag
+    boolean linearCombine = conf.getBoolean(
+        DFS_NAMENODE_SNAPSHOT_DIFF_LINEAR_COMBINE_KEY,
+        DFS_NAMENODE_SNAPSHOT_DIFF_LINEAR_COMBINE_DEFAULT);
+    org.apache.hadoop.hdfs.util.Diff.setLinearCombineEnabled(linearCombine);
+    FSNamesystem.LOG.info("Linear combinePosterior enabled: " + linearCombine);
 
     this.writeLockReportingThresholdMs = conf.getLong(
         DFS_NAMENODE_WRITE_LOCK_REPORTING_THRESHOLD_MS_KEY,

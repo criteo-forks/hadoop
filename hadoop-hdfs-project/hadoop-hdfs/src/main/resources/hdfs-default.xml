@@ -3392,6 +3392,17 @@
 </property>
 
 <property>
+  <name>dfs.namenode.snapshot.diff.linear-combine.enabled</name>
+  <value>false</value>
+  <description>If true, uses the O(n+m) linear merge algorithm for
+    Diff.combinePosterior instead of the default O(n*m) binary search +
+    ArrayList.add(i) approach. This significantly speeds up snapshot diff
+    computations (getSnapshotDiffReportListing) on directories with large
+    numbers of diffs, preventing NameNode freezes.
+  </description>
+</property>
+
+<property>
   <name>dfs.datanode.lock.fair</name>
   <value>true</value>
   <description>If this is true, the Datanode FsDataset lock will be used in Fair

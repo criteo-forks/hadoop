@@ -600,6 +600,10 @@ public class DFSConfigKeys extends CommonConfigurationKeys {
       "dfs.namenode.fslock.fair";
   public static final boolean DFS_NAMENODE_FSLOCK_FAIR_DEFAULT = true;
 
+  public static final String DFS_NAMENODE_SNAPSHOT_DIFF_LINEAR_COMBINE_KEY =
+      "dfs.namenode.snapshot.diff.linear-combine.enabled";
+  public static final boolean DFS_NAMENODE_SNAPSHOT_DIFF_LINEAR_COMBINE_DEFAULT = false;
+
   public static final String  DFS_NAMENODE_LOCK_DETAILED_METRICS_KEY =
       "dfs.namenode.lock.detailed-metrics.enabled";
   public static final boolean DFS_NAMENODE_LOCK_DETAILED_METRICS_DEFAULT =
