@@ -18,6 +18,7 @@
 package org.apache.hadoop.hdfs.util;
 
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.List;
 import java.util.Random;
 
@@ -52,6 +53,52 @@ public class TestDiff {
       for(int m = 0; m <= 10000; m = nextStep(m)) {
         runDiffTest(startSize, m);
       }
+    }
+  }
+
+  @Test
+  public void testLinearCombinePreservesSnapshotChildren() {
+    final INode a = newINode(0, 1);
+    final INode original = newINode(1, 1);
+    final INode intermediate = newINode(1, 1);
+    final INode replacement = newINode(1, 1);
+    final INode canceled = newINode(2, 1);
+    final INode b = newINode(3, 1);
+    final INode deleted = newINode(5, 1);
+    final INode unchanged = newINode(6, 1);
+
+    final Diff<byte[], INode> posterior = new Diff<>();
+    posterior.modify(intermediate, replacement);
+    posterior.delete(canceled);
+    posterior.create(b);
+    posterior.delete(deleted);
+    final List<INode> previous = Arrays.asList(original, deleted, unchanged);
+    final List<INode> current = Arrays.asList(a, replacement, b, unchanged);
+
+    final boolean originalSetting = Diff.isLinearCombineEnabled();
+    try {
+      for (boolean linear : new boolean[] {false, true}) {
+        Diff.setLinearCombineEnabled(linear);
+        final Diff<byte[], INode> combined = new Diff<>();
+        combined.create(a);
+        combined.modify(original, intermediate);
+        combined.create(canceled);
+        final List<INode> processed = new ArrayList<>();
+        combined.combinePosterior(posterior, processed::add);
+
+        Assert.assertTrue(hasIdenticalElements(Arrays.asList(a, replacement, b),
+            combined.getCreatedUnmodifiable()));
+        Assert.assertTrue(hasIdenticalElements(Arrays.asList(original, deleted),
+            combined.getDeletedUnmodifiable()));
+        Assert.assertTrue(hasIdenticalElements(
+            Arrays.asList(intermediate, canceled, null), processed));
+        Assert.assertTrue(hasIdenticalElements(previous,
+            combined.apply2Current(current)));
+        Assert.assertTrue(hasIdenticalElements(current,
+            combined.apply2Previous(previous)));
+      }
+    } finally {
+      Diff.setLinearCombineEnabled(originalSetting);
     }
   }
 

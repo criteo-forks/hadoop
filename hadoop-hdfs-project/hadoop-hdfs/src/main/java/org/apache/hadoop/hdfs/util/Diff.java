@@ -572,195 +572,103 @@ public class Diff<K, E extends Diff.Element<K>> {
   }
 
   /**
-   * Linear O(n+m) merge implementation.
+   * Merge the four sorted lists in O(n+m), using the same per-key rules as
+   * create, delete, and modify.
    */
   private void combinePosteriorLinear(final Diff<K, E> posterior,
       final Processor<E> deletedProcesser) {
-    // --- Linear merge implementation (replaces O(n*m) binary search + ArrayList.add(i)) ---
-    // We build new created/deleted lists for the combined diff by doing a single forward pass
-    // over the existing and posterior lists, which are all sorted.
-    
-    final List<E> posteriorCreated = posterior.getCreatedUnmodifiable();
-    final List<E> posteriorDeleted = posterior.getDeletedUnmodifiable();
+    final Iterator<E> posteriorCreated =
+        posterior.getCreatedUnmodifiable().iterator();
+    final Iterator<E> posteriorDeleted =
+        posterior.getDeletedUnmodifiable().iterator();
+    E c = posteriorCreated.hasNext() ? posteriorCreated.next() : null;
+    E d = posteriorDeleted.hasNext() ? posteriorDeleted.next() : null;
+    if (c == null && d == null) {
+      return;
+    }
 
-    // Save current lists (they will be replaced by the new combined lists)
-    final List<E> currentCreated = this.created;
-    final List<E> currentDeleted = this.deleted;
-
-    // New lists for the result
+    final Iterator<E> currentCreated = getCreatedUnmodifiable().iterator();
+    final Iterator<E> currentDeleted = getDeletedUnmodifiable().iterator();
+    E oldCreated = currentCreated.hasNext() ? currentCreated.next() : null;
+    E oldDeleted = currentDeleted.hasNext() ? currentDeleted.next() : null;
     final List<E> newCreated = new ArrayList<>();
     final List<E> newDeleted = new ArrayList<>();
 
-    // Iterators for the current (this) diff lists
-    final Iterator<E> currentCreatedIter = currentCreated != null 
-        ? currentCreated.iterator() : Collections.emptyIterator();
-    final Iterator<E> currentDeletedIter = currentDeleted != null 
-        ? currentDeleted.iterator() : Collections.emptyIterator();
+    while (c != null || d != null) {
+      final int cmp = c == null ? 1 : d == null ? -1 : c.compareTo(d.getKey());
+      final K key = cmp <= 0 ? c.getKey() : d.getKey();
 
-    // Iterators for the posterior diff lists
-    final Iterator<E> posteriorCreatedIter = posteriorCreated.iterator();
-    final Iterator<E> posteriorDeletedIter = posteriorDeleted.iterator();
+      // Emit smaller keys from both lists before handling this posterior key.
+      while (oldCreated != null && oldCreated.compareTo(key) < 0) {
+        newCreated.add(oldCreated);
+        oldCreated = currentCreated.hasNext() ? currentCreated.next() : null;
+      }
+      while (oldDeleted != null && oldDeleted.compareTo(key) < 0) {
+        newDeleted.add(oldDeleted);
+        oldDeleted = currentDeleted.hasNext() ? currentDeleted.next() : null;
+      }
+      final boolean wasCreated =
+          oldCreated != null && oldCreated.compareTo(key) == 0;
+      final boolean wasDeleted =
+          oldDeleted != null && oldDeleted.compareTo(key) == 0;
 
-    // Current elements from the current (this) diff
-    E cc = currentCreatedIter.hasNext() ? currentCreatedIter.next() : null;
-    E cd = currentDeletedIter.hasNext() ? currentDeletedIter.next() : null;
-
-    // Current elements from the posterior diff
-    E pc = posteriorCreatedIter.hasNext() ? posteriorCreatedIter.next() : null;
-    E pd = posteriorDeletedIter.hasNext() ? posteriorDeletedIter.next() : null;
-
-    while (pc != null || pd != null) {
-      final int cmp = pc == null ? 1 
-          : pd == null ? -1 
-          : pc.compareTo(pd.getKey());
-      
+      E trashed = null;
       if (cmp < 0) {
-        // Case 1: pc is only in posterior created list
-        // Need to check if pc exists in current deleted list (case 1.2)
-        // Advance current deleted iterator to catch up to pc
-        while (cd != null && cd.compareTo(pc.getKey()) < 0) {
-          // This deleted element is not in posterior created, keep it in newDeleted
-          newDeleted.add(cd);
-          cd = currentDeletedIter.hasNext() ? currentDeletedIter.next() : null;
+        // Create. A deletion of the same key in the earlier diff stays.
+        if (wasCreated) {
+          throw new AssertionError("Element already exists: element=" + c
+              + ", created=" + created);
         }
-        
-        if (cd != null && cd.compareTo(pc.getKey()) == 0) {
-          // Case 1.2: (0, d') in this diff -> (c, d') in combined
-          newCreated.add(pc);
-          newDeleted.add(cd);
-          cd = currentDeletedIter.hasNext() ? currentDeletedIter.next() : null;
-        } else {
-          // Case 1.4: (0, 0) in this diff -> (c, 0) in combined
-          newCreated.add(pc);
-        }
-        pc = posteriorCreatedIter.hasNext() ? posteriorCreatedIter.next() : null;
-        
+        newCreated.add(c);
       } else if (cmp > 0) {
-        // Case 2: pd is only in posterior deleted list
-        // Need to check if pd exists in current created list (case 2.1, 2.3)
-        // Advance current created iterator to catch up to pd
-        while (cc != null && cc.compareTo(pd.getKey()) < 0) {
-          // This created element is not in posterior deleted, keep it in newCreated
-          newCreated.add(cc);
-          cc = currentCreatedIter.hasNext() ? currentCreatedIter.next() : null;
-        }
-        
-        if (cc != null && cc.compareTo(pd.getKey()) == 0) {
-          // Case 2.1 or 2.3: (c', 0) or (c', d') in this diff -> remove from c-list
-          // i.e., do not add cc to newCreated. If (c', d'), keep in newDeleted.
-          if (currentDeleted != null) {
-            // Check if it's also in current deleted list (case 2.3)
-            // Since current lists are independent, we don't need to check current deleted here
-            // The cc is consumed, so it's removed from c-list
-            if (deletedProcesser != null) {
-              deletedProcesser.process(cc);
-            }
-          } else {
-            if (deletedProcesser != null) {
-              deletedProcesser.process(cc);
-            }
-          }
-          cc = currentCreatedIter.hasNext() ? currentCreatedIter.next() : null;
-          
-          // Now check if pd is also in current deleted list (case 2.3 -> (0, d'))
-          while (cd != null && cd.compareTo(pd.getKey()) < 0) {
-            newDeleted.add(cd);
-            cd = currentDeletedIter.hasNext() ? currentDeletedIter.next() : null;
-          }
-          if (cd != null && cd.compareTo(pd.getKey()) == 0) {
-            // Case 2.3: (c', d') -> (0, d'), d' is already there
-            // No need to add pd again, cd is already in newDeleted if we advanced past it
-            // Actually, we need to add pd to newDeleted since we are replacing cd
-            // But wait - cd is the old deleted element. We should keep it or replace it?
-            // The semantics of combinePosterior is to keep the current deleted element if it exists
-            // Actually, no - we should use the posterior deleted element since it's newer
-            // But the original code uses delete(d) which adds d to the deleted list
-            // So we add pd to newDeleted
-            newDeleted.add(pd);
-            cd = currentDeletedIter.hasNext() ? currentDeletedIter.next() : null;
-          } else {
-            // Case 2.1: (c', 0) -> (0, 0), nothing to add
-            // Wait, we need to add pd to newDeleted for case 2.4 as well
-            newDeleted.add(pd);
-          }
+        // Delete. Cancel a prior creation and retain any earlier deletion.
+        if (wasCreated) {
+          trashed = oldCreated;
+          oldCreated = currentCreated.hasNext() ? currentCreated.next() : null;
         } else {
-          // Case 2.4: (0, 0) in this diff -> (0, d) in combined
-          // Need to check if pd is in current deleted list to avoid duplicates
-          while (cd != null && cd.compareTo(pd.getKey()) < 0) {
-            newDeleted.add(cd);
-            cd = currentDeletedIter.hasNext() ? currentDeletedIter.next() : null;
+          if (wasDeleted) {
+            throw new AssertionError("Element already exists: element=" + d
+                + ", deleted=" + deleted);
           }
-          if (cd != null && cd.compareTo(pd.getKey()) == 0) {
-            // Already in deleted list, skip (or replace? original code would fail here)
-            // Actually original addDeleted would throw AssertionError
-            // So this case shouldn't happen if invariants hold
-            cd = currentDeletedIter.hasNext() ? currentDeletedIter.next() : null;
-          } else {
-            newDeleted.add(pd);
-          }
+          newDeleted.add(d);
         }
-        pd = posteriorDeletedIter.hasNext() ? posteriorDeletedIter.next() : null;
-        
       } else {
-        // Case 3: cmp == 0, pc and pd have same key, so it's a modify
-        // Need to check current created list (case 3.1, 3.3)
-        while (cc != null && cc.compareTo(pd.getKey()) < 0) {
-          newCreated.add(cc);
-          cc = currentCreatedIter.hasNext() ? currentCreatedIter.next() : null;
+        // Modify. Keep the earliest deleted element for this key.
+        Preconditions.checkArgument(d != c,
+            "They are the same object: oldElement == newElement = %s", c);
+        Preconditions.checkArgument(d.compareTo(c.getKey()) == 0,
+            "The names do not match: oldElement=%s, newElement=%s", d, c);
+        if (wasCreated) {
+          newCreated.add(c);
+          oldCreated = currentCreated.hasNext() ? currentCreated.next() : null;
+          trashed = d;
+        } else if (!wasDeleted) {
+          newCreated.add(c);
+          newDeleted.add(d);
         }
-        
-        if (cc != null && cc.compareTo(pd.getKey()) == 0) {
-          // Case 3.1 or 3.3: replace element in c-list
-          newCreated.add(pc);
-          if (deletedProcesser != null) {
-            deletedProcesser.process(cc);
-          }
-          cc = currentCreatedIter.hasNext() ? currentCreatedIter.next() : null;
-        } else {
-          // Case 3.4: (0, 0) -> (c, d)
-          newCreated.add(pc);
-        }
-        
-        // Check current deleted list for case 3.3
-        while (cd != null && cd.compareTo(pd.getKey()) < 0) {
-          newDeleted.add(cd);
-          cd = currentDeletedIter.hasNext() ? currentDeletedIter.next() : null;
-        }
-        if (cd != null && cd.compareTo(pd.getKey()) == 0) {
-          // Case 3.3: (c', d') -> (c, d'), keep d' in newDeleted
-          // No need to add pd, cd is already there if we haven't passed it
-          // Actually we need to add pd since we consumed cd
-          // But wait, cd was already added? No, we only add if cmp < 0
-          // So cd is still pointing to the matching element
-          // We should keep cd (the old deleted element) or replace with pd?
-          // The original code doesn't modify the deleted list in modify()
-          // So we keep cd and discard pd
-          cd = currentDeletedIter.hasNext() ? currentDeletedIter.next() : null;
-        } else {
-          // Case 3.1 or 3.4: add pd to newDeleted
-          newDeleted.add(pd);
-        }
-        
-        pc = posteriorCreatedIter.hasNext() ? posteriorCreatedIter.next() : null;
-        pd = posteriorDeletedIter.hasNext() ? posteriorDeletedIter.next() : null;
+      }
+
+      if (cmp >= 0 && deletedProcesser != null) {
+        deletedProcesser.process(trashed);
+      }
+      if (cmp <= 0) {
+        c = posteriorCreated.hasNext() ? posteriorCreated.next() : null;
+      }
+      if (cmp >= 0) {
+        d = posteriorDeleted.hasNext() ? posteriorDeleted.next() : null;
       }
     }
 
-    // Add remaining elements from current created list
-    while (cc != null) {
-      newCreated.add(cc);
-      cc = currentCreatedIter.hasNext() ? currentCreatedIter.next() : null;
+    while (oldCreated != null) {
+      newCreated.add(oldCreated);
+      oldCreated = currentCreated.hasNext() ? currentCreated.next() : null;
     }
-
-    // Add remaining elements from current deleted list
-    while (cd != null) {
-      newDeleted.add(cd);
-      cd = currentDeletedIter.hasNext() ? currentDeletedIter.next() : null;
+    while (oldDeleted != null) {
+      newDeleted.add(oldDeleted);
+      oldDeleted = currentDeleted.hasNext() ? currentDeleted.next() : null;
     }
-
-    // Replace the lists
-    this.created = newCreated.isEmpty() ? null : newCreated;
-    this.deleted = newDeleted.isEmpty() ? null : newDeleted;
+    created = created == null && newCreated.isEmpty() ? null : newCreated;
+    deleted = deleted == null && newDeleted.isEmpty() ? null : newDeleted;
   }
 
   @Override
