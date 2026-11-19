@@ -2672,6 +2672,18 @@ public class YarnConfiguration extends Configuration {
   /** Set user remapping lower gid limit to 1 by default. */
   public static final int DEFAULT_NM_DOCKER_USER_REMAPPING_GID_THRESHOLD = 1;
 
+  /**
+   * Pass the user's supplementary groups to docker (--group-add) when user
+   * remapping is enabled.
+   */
+  public static final String NM_DOCKER_USER_REMAPPING_ADD_SUPPLEMENTARY_GROUPS =
+      DOCKER_CONTAINER_RUNTIME_PREFIX
+          + "userremapping-add-supplementary-groups";
+
+  /** Pass supplementary groups to docker by default. */
+  public static final boolean
+      DEFAULT_NM_DOCKER_USER_REMAPPING_ADD_SUPPLEMENTARY_GROUPS = true;
+
   /** ACL list for users allowed to run privileged containers. */
   public static final String NM_DOCKER_PRIVILEGED_CONTAINERS_ACL =
       DOCKER_CONTAINER_RUNTIME_PREFIX + "privileged-containers.acl";

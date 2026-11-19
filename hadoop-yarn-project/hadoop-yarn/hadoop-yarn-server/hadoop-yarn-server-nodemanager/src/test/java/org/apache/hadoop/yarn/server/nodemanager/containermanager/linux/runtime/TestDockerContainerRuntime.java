@@ -732,6 +732,27 @@ public class TestDockerContainerRuntime {
   }
 
   @Test
+  public void testContainerLaunchWithUserRemappingNoSupplementaryGroups()
+      throws ContainerExecutionException, PrivilegedOperationException,
+      IOException {
+    conf.setBoolean(YarnConfiguration.NM_DOCKER_ENABLE_USER_REMAPPING, true);
+    conf.setBoolean(YarnConfiguration
+        .NM_DOCKER_USER_REMAPPING_ADD_SUPPLEMENTARY_GROUPS, false);
+    DockerLinuxContainerRuntime runtime = new DockerLinuxContainerRuntime(
+        mockExecutor, mockCGroupsHandler);
+    runtime.initialize(conf, nmContext);
+    runtime.launchContainer(builder.build());
+    List<String> dockerCommands = readDockerCommands();
+
+    // the user is still remapped, but --group-add is not emitted
+    Assert.assertTrue(dockerCommands.contains("  user=" + uidGidPair));
+    for (String line : dockerCommands) {
+      Assert.assertFalse("unexpected group-add: " + line,
+          line.startsWith("  group-add="));
+    }
+  }
+
+  @Test
   public void testAllowedNetworksConfiguration() throws
       ContainerExecutionException {
     //the default network configuration should cause
