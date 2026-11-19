@@ -250,6 +250,18 @@ The following properties should be set in yarn-site.xml:
     </description>
   </property>
 
+  <property>
+    <name>yarn.nodemanager.runtime.linux.docker.userremapping-add-supplementary-groups</name>
+    <value>true</value>
+    <description>
+      Optional. Whether the user's supplementary groups are passed to docker
+      with --group-add when user remapping is enabled. Set to false for users
+      belonging to a very large number of groups, whose docker command line
+      would otherwise be too large. The GID threshold still applies to all
+      of the user's groups.
+    </description>
+  </property>
+
 </configuration>
 ```
 
