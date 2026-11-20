@@ -274,6 +274,7 @@ public class DockerLinuxContainerRuntime extends OCIContainerRuntime {
   private boolean enableUserReMapping;
   private int userRemappingUidThreshold;
   private int userRemappingGidThreshold;
+  private boolean addSupplementaryGroups;
   private Set<String> capabilities;
   private boolean delayedRemovalAllowed;
 
@@ -406,6 +407,11 @@ public class DockerLinuxContainerRuntime extends OCIContainerRuntime {
     userRemappingGidThreshold = conf.getInt(
       YarnConfiguration.NM_DOCKER_USER_REMAPPING_GID_THRESHOLD,
       YarnConfiguration.DEFAULT_NM_DOCKER_USER_REMAPPING_GID_THRESHOLD);
+
+    addSupplementaryGroups = conf.getBoolean(
+      YarnConfiguration.NM_DOCKER_USER_REMAPPING_ADD_SUPPLEMENTARY_GROUPS,
+      YarnConfiguration
+          .DEFAULT_NM_DOCKER_USER_REMAPPING_ADD_SUPPLEMENTARY_GROUPS);
 
     capabilities = getDockerCapabilitiesFromConf();
 
@@ -885,7 +891,7 @@ public class DockerLinuxContainerRuntime extends OCIContainerRuntime {
       runCommand.setServiceMode(serviceMode);
     }
 
-    if(enableUserReMapping) {
+    if(enableUserReMapping && addSupplementaryGroups) {
       if (!allowPrivilegedContainerExecution(container)) {
         runCommand.groupAdd(groups);
       }
