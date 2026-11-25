@@ -2332,6 +2332,15 @@
   </property>
 
   <property>
+    <description>When user remapping is enabled, pass the user's
+    supplementary groups to docker with --group-add. Set to false for users
+    belonging to many groups, whose docker command line would otherwise be too
+    large. The gid threshold still applies to all of the user's groups.</description>
+    <name>yarn.nodemanager.runtime.linux.docker.userremapping-add-supplementary-groups</name>
+    <value>true</value>
+  </property>
+
+  <property>
     <description>Whether or not users are allowed to request that Docker
       containers honor the debug deletion delay. This is useful for
       troubleshooting Docker container related launch failures.</description>
